@@ -1,1 +1,1 @@
-
+Secure Password Manager: An encrypted vault for storing credentials, utilizing master-password hashing. Requires: File I/O, binary encryption/decryption logic, exception handling for unauthorized access.
