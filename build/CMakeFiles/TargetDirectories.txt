@@ -1,3 +1,0 @@
-/home/supreet/VaultSync/build/CMakeFiles/VaultSync.dir
-/home/supreet/VaultSync/build/CMakeFiles/edit_cache.dir
-/home/supreet/VaultSync/build/CMakeFiles/rebuild_cache.dir
