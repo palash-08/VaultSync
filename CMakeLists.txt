@@ -10,4 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(VaultSync
     src/main.cpp
+    src/Credential.cpp
 )
+
+target_include_directories(VaultSync PRIVATE include)

@@ -2,17 +2,32 @@
 #define CREDENTIAL_H
 
 #include <string>
-using namespace std;
-class Credential{
-protected:
-    string username;
-    string password;
-    string notes;
+
+class Credential {
+private:
+    std::string service;
+    std::string username;
+    std::string password;
+    std::string notes;
 
 public:
-    Credential(const string& username,
-               const string& password,
-               const string& notes);
+    // Constructor
+    Credential(const std::string& service,
+               const std::string& username,
+               const std::string& password,
+               const std::string& notes = "");
+
+    // Getters
+    const std::string& getService() const;
+    const std::string& getUsername() const;
+    const std::string& getPassword() const;
+    const std::string& getNotes() const;
+
+    // Setters
+    void setService(const std::string& service);
+    void setUsername(const std::string& username);
+    void setPassword(const std::string& password);
+    void setNotes(const std::string& notes);
 };
 
-#endif
+#endif // CREDENTIAL_H
