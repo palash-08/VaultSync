@@ -12,6 +12,23 @@ add_executable(VaultSync
     src/main.cpp
     src/Credential.cpp
     src/FileStorage.cpp
+    src/XORCipher.cpp
+    src/CryptoUtils.cpp
+    src/MasterVault.cpp
+    src/TerminalUtils.cpp
 )
 
 target_include_directories(VaultSync PRIVATE include)
+
+# Cipher and cryptographic test binary
+add_executable(test_cipher
+    tests/test_cipher.cpp
+    src/Credential.cpp
+    src/FileStorage.cpp
+    src/XORCipher.cpp
+    src/CryptoUtils.cpp
+    src/MasterVault.cpp
+    src/TerminalUtils.cpp
+)
+
+target_include_directories(test_cipher PRIVATE include)
