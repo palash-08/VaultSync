@@ -123,6 +123,28 @@ public:
     bool addCredential(const Credential& credential);
 
     /**
+     * @brief Updates an existing credential at the specified index and persists to disk.
+     * @param index Zero-based index of the credential.
+     * @param updated Updated credential object.
+     * @return True if updated and saved successfully, false otherwise.
+     */
+    bool updateCredential(size_t index, const Credential& updated);
+
+    /**
+     * @brief Verifies whether the provided password matches the Credential Vault Password.
+     * @param credPassword Plaintext credential vault password to verify.
+     * @return True if password matches the stored salted hash, false otherwise.
+     */
+    bool verifyCredentialPassword(const std::string& credPassword) const;
+
+    /**
+     * @brief Removes a credential at the specified index and persists the encrypted vault to disk.
+     * @param index Zero-based index of the credential to remove.
+     * @return True if removed and saved successfully, false otherwise.
+     */
+    bool deleteCredential(size_t index);
+
+    /**
      * @brief Returns the collection of stored credentials if Credential Vault is unlocked.
      */
     const std::vector<Credential>& getCredentials() const;

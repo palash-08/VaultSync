@@ -220,6 +220,139 @@ void testMasterVaultDualAuth() {
     std::cout << "  --> PASS: Master Vault and Credential Vault dual authentication verified.\n\n";
 }
 
+void testMasterVaultEditCredential() {
+    std::cout << "[Test 6] MasterVault Credential Edit & Encrypted Persistence Roundtrip\n";
+
+    const std::string testUser = "testuser_edit";
+    const std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    MasterVault vault;
+    std::string masterPass = "MasterSecret#99";
+    std::string credPass = "CredSecret#88";
+
+    assert(vault.create(testUser, masterPass));
+    assert(vault.setupCredentialPassword(credPass));
+
+    // 1. Add initial credential
+    Credential original("GitHub", "olduser", "oldpass123", "old notes");
+    assert(vault.addCredential(original));
+    assert(vault.getCredentialCount() == 1);
+
+    // 2. Edit credential at index 0
+    Credential updated("GitHub Enterprise", "newuser", "newpass456", "new notes");
+    bool editOk = vault.updateCredential(0, updated);
+    assert(editOk && "MasterVault::updateCredential failed!");
+
+    // 3. Verify in-memory update
+    const auto& creds = vault.getCredentials();
+    assert(creds[0].getService() == "GitHub Enterprise");
+    assert(creds[0].getUsername() == "newuser");
+    assert(creds[0].getPassword() == "newpass456");
+    assert(creds[0].getNotes() == "new notes");
+
+    // 4. Out-of-bounds update returns false
+    assert(!vault.updateCredential(5, updated) && "Out-of-bounds update should fail!");
+
+    // 5. Lock vault and reload from disk to verify persistence
+    vault.lock();
+
+    MasterVault reloadedVault;
+    int attempts = 0;
+    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
+    assert(reloadedVault.unlockCredentials(credPass, attempts));
+
+    assert(reloadedVault.getCredentialCount() == 1);
+    const auto& reloadedCreds = reloadedVault.getCredentials();
+    assert(reloadedCreds[0].getService() == "GitHub Enterprise");
+    assert(reloadedCreds[0].getUsername() == "newuser");
+    assert(reloadedCreds[0].getPassword() == "newpass456");
+    assert(reloadedCreds[0].getNotes() == "new notes");
+
+    // 6. Verify plaintext password is NOT in raw encrypted file
+    std::ifstream raw(testVaultPath, std::ios::binary);
+    std::string rawData((std::istreambuf_iterator<char>(raw)),
+                         std::istreambuf_iterator<char>());
+    raw.close();
+    assert(rawData.find("newpass456") == std::string::npos && "Plaintext password leaked in file!");
+
+    // Cleanup
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: Credential edit, persistence, and encryption verified.\n\n";
+}
+
+void testMasterVaultDeleteCredential() {
+    std::cout << "[Test 7] MasterVault Credential Secure Deletion & Encrypted Persistence Roundtrip\n";
+
+    const std::string testUser = "testuser_delete";
+    const std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    MasterVault vault;
+    std::string masterPass = "MasterSecret#11";
+    std::string credPass = "CredSecret#22";
+
+    assert(vault.create(testUser, masterPass));
+    assert(vault.setupCredentialPassword(credPass));
+
+    // 1. Add two credentials
+    Credential cred1("GitHub", "octocat", "supertoken999", "notes1");
+    Credential cred2("AWS", "clouduser", "cloudsecret888", "notes2");
+    assert(vault.addCredential(cred1));
+    assert(vault.addCredential(cred2));
+    assert(vault.getCredentialCount() == 2);
+
+    // 2. verifyCredentialPassword checks
+    assert(!vault.verifyCredentialPassword("WrongPassword") && "Wrong password should be rejected!");
+    assert(!vault.verifyCredentialPassword(masterPass) && "Master password must NEVER authorize deletion!");
+    assert(vault.verifyCredentialPassword(credPass) && "Correct credential password must authorize deletion!");
+
+    // 3. Delete first credential ("GitHub")
+    bool deleteOk = vault.deleteCredential(0);
+    assert(deleteOk && "MasterVault::deleteCredential failed!");
+    assert(vault.getCredentialCount() == 1);
+    assert(vault.getCredentials()[0].getService() == "AWS");
+
+    // 4. Out-of-bounds delete returns false
+    assert(!vault.deleteCredential(5) && "Out-of-bounds delete should fail!");
+
+    // 5. Lock vault and reload from disk to verify persistence
+    vault.lock();
+
+    MasterVault reloadedVault;
+    int attempts = 0;
+    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
+    assert(reloadedVault.unlockCredentials(credPass, attempts));
+
+    assert(reloadedVault.getCredentialCount() == 1);
+    assert(reloadedVault.getCredentials()[0].getService() == "AWS");
+
+    // 6. Verify deleted plaintext password is completely gone from disk
+    std::ifstream raw(testVaultPath, std::ios::binary);
+    std::string rawData((std::istreambuf_iterator<char>(raw)),
+                         std::istreambuf_iterator<char>());
+    raw.close();
+    assert(rawData.find("supertoken999") == std::string::npos && "Deleted password leaked in file!");
+
+    // 7. Delete remaining credential to verify empty vault persistence
+    assert(reloadedVault.deleteCredential(0));
+    assert(reloadedVault.getCredentialCount() == 0);
+
+    reloadedVault.lock();
+    MasterVault emptyReloaded;
+    assert(emptyReloaded.unlockMaster(testUser, masterPass, attempts));
+    assert(emptyReloaded.unlockCredentials(credPass, attempts));
+    assert(emptyReloaded.getCredentialCount() == 0);
+
+    // Cleanup
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: Secure credential deletion, persistence, and authorization verified.\n\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "  VaultSync: ICipher & XORCipher Tests  \n";
@@ -230,6 +363,8 @@ int main() {
     testFileStorageEncryptionIntegration();
     testCryptoUtils();
     testMasterVaultDualAuth();
+    testMasterVaultEditCredential();
+    testMasterVaultDeleteCredential();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;

@@ -232,6 +232,51 @@ bool MasterVault::addCredential(const Credential& credential) {
     return storage->save(credentials);
 }
 
+bool MasterVault::updateCredential(size_t index, const Credential& updated) {
+    if (!masterUnlocked || !credUnlocked || !storage || !cipher) {
+        return false;
+    }
+    if (index >= credentials.size()) {
+        return false;
+    }
+
+    Credential original = credentials[index];
+    credentials[index] = updated;
+    if (!storage->save(credentials)) {
+        credentials[index] = original;
+        return false;
+    }
+    return true;
+}
+
+bool MasterVault::verifyCredentialPassword(const std::string& credPassword) const {
+    if (credPassword.empty() || credPasswordHash.empty() || credSalt.empty()) {
+        return false;
+    }
+    // Master password must never be accepted to authorize credential operations
+    if (CryptoUtils::verifyPassword(credPassword, masterSalt, masterPasswordHash)) {
+        return false;
+    }
+    return CryptoUtils::verifyPassword(credPassword, credSalt, credPasswordHash);
+}
+
+bool MasterVault::deleteCredential(size_t index) {
+    if (!masterUnlocked || !credUnlocked || !storage || !cipher) {
+        return false;
+    }
+    if (index >= credentials.size()) {
+        return false;
+    }
+
+    Credential removed = credentials[index];
+    credentials.erase(credentials.begin() + index);
+    if (!storage->save(credentials)) {
+        credentials.insert(credentials.begin() + index, removed);
+        return false;
+    }
+    return true;
+}
+
 const std::vector<Credential>& MasterVault::getCredentials() const {
     static const std::vector<Credential> empty;
     if (!masterUnlocked || !credUnlocked) {
