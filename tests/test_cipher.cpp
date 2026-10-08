@@ -353,6 +353,86 @@ void testMasterVaultDeleteCredential() {
     std::cout << "  --> PASS: Secure credential deletion, persistence, and authorization verified.\n\n";
 }
 
+void testMasterVaultLoginAttemptsAndLockout() {
+    std::cout << "[Test 8] MasterVault 3-Attempt Failed Login and Temporary Lockout\n";
+
+    const std::string testUser = "testuser_lockout";
+    const std::string otherUser = "testuser_other";
+    const std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    MasterVault vault;
+    std::string masterPass = "MasterSecret#99";
+    std::string credPass = "CredSecret#88";
+
+    assert(vault.create(testUser, masterPass));
+    assert(vault.setupCredentialPassword(credPass));
+    assert(vault.addCredential(Credential("TestService", "lockout_user", "sample_pass", "notes")));
+    vault.lock();
+
+    // 1. Enter wrong Master Password once: 2 attempts remaining
+    int attempts = 0;
+    bool attempt1 = vault.unlockMaster(testUser, "WrongPass1", attempts);
+    assert(!attempt1 && "Wrong password must fail!");
+    assert(attempts == 2 && "Remaining attempts must be 2!");
+
+    // 2. Enter wrong Master Password twice: 1 attempt remaining
+    bool attempt2 = vault.unlockMaster(testUser, "WrongPass2", attempts);
+    assert(!attempt2 && "Wrong password must fail!");
+    assert(attempts == 1 && "Remaining attempts must be 1!");
+
+    // 3. Enter wrong Master Password three times: lockout triggered
+    bool attempt3 = vault.unlockMaster(testUser, "WrongPass3", attempts);
+    assert(!attempt3 && "Wrong password must fail!");
+    assert(attempts == 0 && "Remaining attempts must be 0!");
+
+    // 4. Verify temporary lockout active and reports remaining duration
+    int remainingSec = 0;
+    assert(MasterVault::isMasterLockedOut(testUser, remainingSec) && "User must be locked out after 3 failures!");
+    assert(remainingSec >= 28 && remainingSec <= 30 && "Remaining lockout seconds must be within 30s window!");
+
+    // 5. Verify lockout is scoped to this user only (other user not blocked)
+    int otherRemaining = 0;
+    assert(!MasterVault::isMasterLockedOut(otherUser, otherRemaining) && "Unrelated user must NOT be locked out!");
+
+    // 6. Attempting login during lockout must remain blocked
+    bool blockedAttempt = vault.unlockMaster(testUser, masterPass, attempts);
+    assert(!blockedAttempt && "Login must be blocked during temporary lockout!");
+    assert(attempts == 0);
+
+    // 7. Reset lockout (simulates 30s expiration)
+    MasterVault::resetMasterLockout(testUser);
+    assert(!MasterVault::isMasterLockedOut(testUser, remainingSec) && "Lockout must be cleared!");
+
+    // 8. Successful login resets failed attempts
+    bool correctLogin = vault.unlockMaster(testUser, masterPass, attempts);
+    assert(correctLogin && "Login must succeed with correct password after lockout!");
+    assert(attempts == 3 && "Attempts must be reset to 3 upon successful login!");
+
+    // 9. Verify partial failure followed by success resets counter
+    vault.lock();
+    assert(!vault.unlockMaster(testUser, "WrongOnce", attempts));
+    assert(attempts == 2);
+    assert(vault.unlockMaster(testUser, masterPass, attempts)); // Success resets counter
+    vault.lock();
+    assert(!vault.unlockMaster(testUser, "WrongAgain", attempts));
+    assert(attempts == 2 && "Next session must start with full 3 attempts!");
+
+    // 10. Verify no credential data was lost or modified
+    vault.resetMasterLockout(testUser);
+    assert(vault.unlockMaster(testUser, masterPass, attempts));
+    assert(vault.unlockCredentials(credPass, attempts));
+    assert(vault.getCredentialCount() == 1);
+    assert(vault.getCredentials()[0].getService() == "TestService");
+    assert(vault.getCredentials()[0].getPassword() == "sample_pass");
+
+    // Cleanup
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: 3-attempt lockout, user-scoping, and reset behavior verified.\n\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "  VaultSync: ICipher & XORCipher Tests  \n";
@@ -365,6 +445,7 @@ int main() {
     testMasterVaultDualAuth();
     testMasterVaultEditCredential();
     testMasterVaultDeleteCredential();
+    testMasterVaultLoginAttemptsAndLockout();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;

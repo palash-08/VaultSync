@@ -398,24 +398,40 @@ bool handleLoginMasterVault(MasterVault& vault) {
         return true;
     }
 
-    int attempts = 3;
-    while (attempts > 0) {
+    int remainingSeconds = 0;
+    if (MasterVault::isMasterLockedOut(username, remainingSeconds)) {
+        std::cout << "\nMaster Vault login is temporarily locked.\n";
+        std::cout << "Please try again in " << remainingSeconds << " seconds.\n";
+        return true;
+    }
+
+    while (true) {
+        if (MasterVault::isMasterLockedOut(username, remainingSeconds)) {
+            std::cout << "\nMaster Vault login is temporarily locked.\n";
+            std::cout << "Please try again in " << remainingSeconds << " seconds.\n";
+            return true;
+        }
+
         std::string masterPassword = TerminalUtils::readHiddenPassword("Enter master password: ");
+        if (masterPassword.empty() && !std::cin.good()) {
+            return true;
+        }
+
         int attemptsRemaining = 0;
         if (vault.unlockMaster(username, masterPassword, attemptsRemaining)) {
             std::cout << "\nMaster vault loaded.\n";
             return runMasterVaultSession(vault);
         }
 
-        attempts--;
-        std::cout << "Invalid master password.\n";
-        if (attempts <= 0) {
+        if (attemptsRemaining > 0) {
+            std::cout << "Invalid master password.\n";
+            std::cout << "Attempts remaining: " << attemptsRemaining << "\n";
+        } else {
             std::cout << "\nMaximum login attempts exceeded.\n";
-            std::cout << "Master Vault access denied.\n";
+            std::cout << "Master Vault login temporarily locked.\n";
             return true;
         }
     }
-    return true;
 }
 
 } // anonymous namespace

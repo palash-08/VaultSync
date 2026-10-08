@@ -2,8 +2,21 @@
 #include "CryptoUtils.h"
 #include "XORCipher.h"
 #include <filesystem>
+#include <chrono>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+struct LockoutRecord {
+    int failedAttempts = 0;
+    std::chrono::steady_clock::time_point lockoutEnd{};
+};
+
+std::unordered_map<std::string, LockoutRecord> g_userLockouts;
+
+} // anonymous namespace
 
 MasterVault::MasterVault(const std::string& path)
     : vaultPath(path),
@@ -85,6 +98,12 @@ bool MasterVault::unlockMaster(const std::string& user, const std::string& maste
         return false;
     }
 
+    int remainingSeconds = 0;
+    if (isMasterLockedOut(user, remainingSeconds)) {
+        attemptsRemaining = 0;
+        return false;
+    }
+
     if (!existsForUser(user)) {
         attemptsRemaining = 0;
         return false;
@@ -114,16 +133,59 @@ bool MasterVault::unlockMaster(const std::string& user, const std::string& maste
         credFailedAttempts = 0;
         credLockedOut = false;
         attemptsRemaining = 3;
+
+        // Reset user failed attempts & lockout state on successful login
+        g_userLockouts[user].failedAttempts = 0;
+        g_userLockouts[user].lockoutEnd = std::chrono::steady_clock::time_point{};
         return true;
     }
 
-    masterFailedAttempts++;
-    attemptsRemaining = 3 - masterFailedAttempts;
-    if (attemptsRemaining <= 0) {
+    auto& record = g_userLockouts[user];
+    record.failedAttempts++;
+    masterFailedAttempts = record.failedAttempts;
+
+    if (record.failedAttempts >= 3) {
+        record.lockoutEnd = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         masterLockedOut = true;
         attemptsRemaining = 0;
+    } else {
+        attemptsRemaining = 3 - record.failedAttempts;
     }
     return false;
+}
+
+bool MasterVault::isMasterLockedOut(const std::string& username, int& remainingSeconds) {
+    auto it = g_userLockouts.find(username);
+    if (it == g_userLockouts.end()) {
+        remainingSeconds = 0;
+        return false;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (it->second.lockoutEnd > now) {
+        auto diffMs = std::chrono::duration_cast<std::chrono::milliseconds>(it->second.lockoutEnd - now).count();
+        remainingSeconds = static_cast<int>((diffMs + 999) / 1000);
+        if (remainingSeconds <= 0) {
+            remainingSeconds = 1;
+        }
+        return true;
+    }
+
+    // Lockout expired: reset failed attempts counter
+    if (it->second.failedAttempts >= 3) {
+        it->second.failedAttempts = 0;
+        it->second.lockoutEnd = std::chrono::steady_clock::time_point{};
+    }
+    remainingSeconds = 0;
+    return false;
+}
+
+void MasterVault::resetMasterLockout(const std::string& username) {
+    auto it = g_userLockouts.find(username);
+    if (it != g_userLockouts.end()) {
+        it->second.failedAttempts = 0;
+        it->second.lockoutEnd = std::chrono::steady_clock::time_point{};
+    }
 }
 
 bool MasterVault::isMasterUnlocked() const {

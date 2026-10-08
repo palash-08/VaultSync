@@ -75,6 +75,20 @@ public:
     bool unlockMaster(const std::string& username, const std::string& masterPassword, int& attemptsRemaining);
 
     /**
+     * @brief Checks if Master Vault login is currently temporarily locked out for the given user.
+     * @param username Vault owner identifier.
+     * @param remainingSeconds Output parameter reporting remaining lockout time in seconds.
+     * @return True if locked out, false otherwise.
+     */
+    static bool isMasterLockedOut(const std::string& username, int& remainingSeconds);
+
+    /**
+     * @brief Resets failed login attempts and lockout state for the specified user.
+     * @param username Vault owner identifier.
+     */
+    static void resetMasterLockout(const std::string& username);
+
+    /**
      * @brief Checks if the Master Vault is currently unlocked.
      */
     bool isMasterUnlocked() const;
