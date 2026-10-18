@@ -13,8 +13,53 @@
 #include "Credential.h"
 #include "CryptoUtils.h"
 #include "MasterVault.h"
+#include "WebCredential.h"
+#include "WiFiCredential.h"
+#include "SSHCredential.h"
+#include "Repository.h"
+#include "Vault.h"
+#include "VaultProxy.h"
+#include "VaultExceptions.h"
+#include "PasswordGenerator.h"
+#include "PasswordStrength.h"
+#include "PasswordAnalyzer.h"
 
 namespace fs = std::filesystem;
+
+void testArchitectureComponents() {
+    std::vector<std::shared_ptr<Credential>> originals={
+        std::make_shared<WebCredential>("Web","alice","web-secret","note","https://example.test"),
+        std::make_shared<WiFiCredential>("Home WiFi","","wifi-secret","","HomeNet","WPA2"),
+        std::make_shared<SSHCredential>("Server","root","ssh-secret","","host.test",2222)
+    };
+    assert(originals[0]->clone()->getType()=="web");
+    assert(*originals[0]==*originals[0]->clone());
+    assert(originals[0]->matches("alice"));
+    Repository<Credential> repo; for(auto& c:originals)repo.add(c);
+    assert(repo.size()==3 && repo.get(1)->getType()=="wifi");
+    assert(repo.find([](const Credential& c){return c.matches("host.test");}).size()==1);
+
+    const std::string path="data/test_polymorphic_vault.bin"; if(fs::exists(path))fs::remove(path);
+    FileStorage storage(path); assert(storage.save(originals));
+    auto restored=storage.loadPolymorphic(); assert(restored.size()==3);
+    assert(restored[0]->getType()=="web" && restored[1]->getType()=="wifi" && restored[2]->getType()=="ssh");
+    assert(static_cast<WebCredential&>(*restored[0]).getUrl()=="https://example.test");
+    assert(static_cast<WiFiCredential&>(*restored[1]).getSsid()=="HomeNet");
+    assert(static_cast<SSHCredential&>(*restored[2]).getPort()==2222);
+    assert(*restored[0]==*originals[0] && *restored[1]==*originals[1] && *restored[2]==*originals[2]);
+    fs::remove(path);
+
+    Vault vault; VaultProxy denied(vault);
+    bool rejected=false;try{denied.getCredentials();}catch(const UnauthorizedAccessException&){rejected=true;}assert(rejected);
+    vault.unlock(); VaultProxy proxy(vault,true); proxy.addCredential(originals[0]); assert(proxy.search("alice").size()==1);
+    proxy.lock(); rejected=false;try{proxy.getCredentials();}catch(const UnauthorizedAccessException&){rejected=true;}assert(rejected);
+    bool exceptionType=false;try{throw CorruptedVaultException();}catch(const VaultException&){exceptionType=true;}assert(exceptionType);
+
+    auto password=PasswordGenerator::generate(24,true,true,true,true); assert(password.size()==24);
+    auto strength=PasswordStrength::analyze(password);assert(strength.score>0&&strength.entropy>0);
+    std::vector<std::shared_ptr<Credential>> reused={std::make_shared<Credential>("a","u","same"),std::make_shared<Credential>("b","u","same")};
+    assert(PasswordAnalyzer::isReused("same",reused)); assert(PasswordAnalyzer::securityScore(reused).reusedPasswords==2);
+}
 
 void testBasicXORRoundtrip() {
     std::cout << "[Test 1] Basic Plaintext -> Encrypt -> Decrypt -> Plaintext Roundtrip\n";
@@ -446,6 +491,7 @@ int main() {
     testMasterVaultEditCredential();
     testMasterVaultDeleteCredential();
     testMasterVaultLoginAttemptsAndLockout();
+    testArchitectureComponents();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;

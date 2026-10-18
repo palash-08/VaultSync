@@ -1,0 +1,4 @@
+#include "VaultProxy.h"
+#include "VaultExceptions.h"
+void VaultProxy::authorize()const{if(!authenticated||vault.isLocked())throw UnauthorizedAccessException();}
+void VaultProxy::addCredential(std::shared_ptr<Credential>c){authorize();vault.addCredential(std::move(c));}bool VaultProxy::updateCredential(size_t i,std::shared_ptr<Credential>c){authorize();return vault.updateCredential(i,std::move(c));}bool VaultProxy::deleteCredential(size_t i){authorize();return vault.deleteCredential(i);}std::vector<std::shared_ptr<Credential>> VaultProxy::getCredentials()const{authorize();return vault.getCredentials();}std::vector<std::shared_ptr<Credential>> VaultProxy::search(const std::string&q)const{authorize();return vault.search(q);}void VaultProxy::lock(){if(authenticated)vault.lock();authenticated=false;}bool VaultProxy::isLocked()const{return !authenticated||vault.isLocked();}

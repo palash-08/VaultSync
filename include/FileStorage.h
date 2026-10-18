@@ -25,13 +25,17 @@ private:
 
     static void serializeCredentials(std::ostream& os, const std::vector<Credential>& credentials);
     static std::vector<Credential> deserializeCredentials(std::istream& is);
+    static void serializePolymorphic(std::ostream&, const std::vector<std::shared_ptr<Credential>>&);
+    static std::vector<std::shared_ptr<Credential>> deserializePolymorphic(std::istream&);
 
 public:
     explicit FileStorage(const std::string& path = "data/vault.bin",
                          std::shared_ptr<ICipher> cipher = nullptr);
 
     bool save(const std::vector<Credential>& credentials) const;
+    bool save(const std::vector<std::shared_ptr<Credential>>& credentials) const;
     std::vector<Credential> load();
+    std::vector<std::shared_ptr<Credential>> loadPolymorphic();
 
     bool readHeader(std::string& outUsername,
                     std::string& outMasterSalt, std::string& outMasterHash,

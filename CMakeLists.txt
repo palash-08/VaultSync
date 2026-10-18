@@ -11,6 +11,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(VaultSync
     src/main.cpp
     src/Credential.cpp
+    src/WebCredential.cpp
+    src/WiFiCredential.cpp
+    src/SSHCredential.cpp
+    src/CredentialFactory.cpp
+    src/Vault.cpp
+    src/VaultProxy.cpp
+    src/PasswordGenerator.cpp
+    src/PasswordStrength.cpp
+    src/PasswordAnalyzer.cpp
     src/FileStorage.cpp
     src/XORCipher.cpp
     src/CryptoUtils.cpp
@@ -24,6 +33,15 @@ target_include_directories(VaultSync PRIVATE include)
 add_executable(test_cipher
     tests/test_cipher.cpp
     src/Credential.cpp
+    src/WebCredential.cpp
+    src/WiFiCredential.cpp
+    src/SSHCredential.cpp
+    src/CredentialFactory.cpp
+    src/Vault.cpp
+    src/VaultProxy.cpp
+    src/PasswordGenerator.cpp
+    src/PasswordStrength.cpp
+    src/PasswordAnalyzer.cpp
     src/FileStorage.cpp
     src/XORCipher.cpp
     src/CryptoUtils.cpp

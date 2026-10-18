@@ -1,0 +1,4 @@
+#include "PasswordStrength.h"
+#include <cmath>
+#include <cctype>
+PasswordStrengthResult PasswordStrength::analyze(const std::string&p){int pool=0;bool u=false,l=false,d=false,s=false;for(unsigned char c:p){u|=std::isupper(c);l|=std::islower(c);d|=std::isdigit(c);s|=!std::isalnum(c);}pool=(u?26:0)+(l?26:0)+(d?10:0)+(s?33:0);double e=p.empty()||!pool?0:p.size()*std::log2(pool);int sc=static_cast<int>(e/1.0);if(sc>100)sc=100;if(p.size()<8)sc=std::min(sc,25);std::string f=sc>=80?"Strong":sc>=50?"Moderate":"Weak; use a longer, less predictable password";return{sc,e,f};}int PasswordStrength::score(const std::string&p){return analyze(p).score;}double PasswordStrength::entropy(const std::string&p){return analyze(p).entropy;}std::string PasswordStrength::feedback(const std::string&p){return analyze(p).feedback;}
