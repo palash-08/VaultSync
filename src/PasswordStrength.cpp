@@ -1,4 +1,60 @@
 #include "PasswordStrength.h"
-#include <cmath>
+
+#include <algorithm>
 #include <cctype>
-PasswordStrengthResult PasswordStrength::analyze(const std::string&p){int pool=0;bool u=false,l=false,d=false,s=false;for(unsigned char c:p){u|=std::isupper(c);l|=std::islower(c);d|=std::isdigit(c);s|=!std::isalnum(c);}pool=(u?26:0)+(l?26:0)+(d?10:0)+(s?33:0);double e=p.empty()||!pool?0:p.size()*std::log2(pool);int sc=static_cast<int>(e/1.0);if(sc>100)sc=100;if(p.size()<8)sc=std::min(sc,25);std::string f=sc>=80?"Strong":sc>=50?"Moderate":"Weak; use a longer, less predictable password";return{sc,e,f};}int PasswordStrength::score(const std::string&p){return analyze(p).score;}double PasswordStrength::entropy(const std::string&p){return analyze(p).entropy;}std::string PasswordStrength::feedback(const std::string&p){return analyze(p).feedback;}
+#include <cmath>
+
+PasswordStrengthResult PasswordStrength::analyze(const std::string& password) {
+    int poolSize = 0;
+    bool hasUppercase = false;
+    bool hasLowercase = false;
+    bool hasDigits = false;
+    bool hasSymbols = false;
+
+    for (unsigned char character : password) {
+        hasUppercase |= static_cast<bool>(std::isupper(character));
+        hasLowercase |= static_cast<bool>(std::islower(character));
+        hasDigits |= static_cast<bool>(std::isdigit(character));
+        hasSymbols |= !static_cast<bool>(std::isalnum(character));
+    }
+
+    poolSize = (hasUppercase ? 26 : 0) +
+               (hasLowercase ? 26 : 0) +
+               (hasDigits ? 10 : 0) +
+               (hasSymbols ? 33 : 0);
+
+    double calculatedEntropy = (password.empty() || poolSize == 0)
+                                   ? 0.0
+                                   : static_cast<double>(password.size()) * std::log2(poolSize);
+
+    int calculatedScore = static_cast<int>(calculatedEntropy);
+    if (calculatedScore > 100) {
+        calculatedScore = 100;
+    }
+    if (password.size() < 8) {
+        calculatedScore = std::min(calculatedScore, 25);
+    }
+
+    std::string feedbackMessage;
+    if (calculatedScore >= 80) {
+        feedbackMessage = "Strong";
+    } else if (calculatedScore >= 50) {
+        feedbackMessage = "Moderate";
+    } else {
+        feedbackMessage = "Weak; use a longer, less predictable password";
+    }
+
+    return PasswordStrengthResult{calculatedScore, calculatedEntropy, feedbackMessage};
+}
+
+int PasswordStrength::score(const std::string& password) {
+    return analyze(password).score;
+}
+
+double PasswordStrength::entropy(const std::string& password) {
+    return analyze(password).entropy;
+}
+
+std::string PasswordStrength::feedback(const std::string& password) {
+    return analyze(password).feedback;
+}

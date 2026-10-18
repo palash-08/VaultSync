@@ -1,3 +1,49 @@
 #include "Vault.h"
-void Vault::addCredential(std::shared_ptr<Credential> c){if(!locked)credentials.add(std::move(c));}bool Vault::updateCredential(size_t i,std::shared_ptr<Credential> c){return !locked&&credentials.replace(i,std::move(c));}bool Vault::deleteCredential(size_t i){return !locked&&credentials.remove(i);}
-std::vector<std::shared_ptr<Credential>> Vault::getCredentials()const{return locked?std::vector<std::shared_ptr<Credential>>{}:credentials.getAll();}std::vector<std::shared_ptr<Credential>> Vault::search(const std::string&q)const{return locked?std::vector<std::shared_ptr<Credential>>{}:credentials.find([&](const Credential&c){return c.matches(q);});}void Vault::lock(){locked=true;}bool Vault::isLocked()const{return locked;}void Vault::unlock(){locked=false;}
+
+void Vault::addCredential(std::shared_ptr<Credential> credential) {
+    if (!locked) {
+        credentials.add(std::move(credential));
+    }
+}
+
+bool Vault::updateCredential(size_t index, std::shared_ptr<Credential> credential) {
+    if (locked) {
+        return false;
+    }
+    return credentials.replace(index, std::move(credential));
+}
+
+bool Vault::deleteCredential(size_t index) {
+    if (locked) {
+        return false;
+    }
+    return credentials.remove(index);
+}
+
+std::vector<std::shared_ptr<Credential>> Vault::getCredentials() const {
+    if (locked) {
+        return {};
+    }
+    return credentials.getAll();
+}
+
+std::vector<std::shared_ptr<Credential>> Vault::search(const std::string& query) const {
+    if (locked) {
+        return {};
+    }
+    return credentials.find([&query](const Credential& credential) {
+        return credential.matches(query);
+    });
+}
+
+void Vault::lock() {
+    locked = true;
+}
+
+bool Vault::isLocked() const {
+    return locked;
+}
+
+void Vault::unlock() {
+    locked = false;
+}

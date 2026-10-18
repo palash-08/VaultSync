@@ -85,16 +85,41 @@ std::vector<Credential> FileStorage::deserializeCredentials(std::istream& is) {
     return result;
 }
 
-void FileStorage::serializePolymorphic(std::ostream& os,const std::vector<std::shared_ptr<Credential>>& credentials) {
-    uint32_t count=static_cast<uint32_t>(credentials.size()); os.write(reinterpret_cast<const char*>(&count),4);
-    for(const auto& c:credentials){ if(!c) throw std::invalid_argument("Cannot serialize a null credential"); writeString(os,c->getType()); c->serialize(os); }
+void FileStorage::serializePolymorphic(std::ostream& os,
+                                       const std::vector<std::shared_ptr<Credential>>& credentials) {
+    uint32_t count = static_cast<uint32_t>(credentials.size());
+    os.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+    for (const auto& credential : credentials) {
+        if (!credential) {
+            throw std::invalid_argument("Cannot serialize a null credential");
+        }
+        writeString(os, credential->getType());
+        credential->serialize(os);
+    }
 }
+
 std::vector<std::shared_ptr<Credential>> FileStorage::deserializePolymorphic(std::istream& is) {
-    uint32_t count=0;is.read(reinterpret_cast<char*>(&count),4);if(!is||count>100000)throw CorruptedVaultException("Invalid credential count");
-    std::vector<std::shared_ptr<Credential>> result;result.reserve(count);
-    for(uint32_t n=0;n<count;++n){auto type=readString(is);if(!is)throw CorruptedVaultException("Missing credential type");result.push_back(CredentialFactory::deserialize(type,is));}
+    uint32_t count = 0;
+    is.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!is || count > 100000) {
+        throw CorruptedVaultException("Invalid credential count");
+    }
+
+    std::vector<std::shared_ptr<Credential>> result;
+    result.reserve(count);
+
+    for (uint32_t index = 0; index < count; ++index) {
+        std::string type = readString(is);
+        if (!is) {
+            throw CorruptedVaultException("Missing credential type");
+        }
+        result.push_back(CredentialFactory::deserialize(type, is));
+    }
+
     return result;
 }
+
 
 bool FileStorage::readHeader(std::string& outUsername,
                             std::string& outMasterSalt, std::string& outMasterHash,
@@ -206,19 +231,77 @@ bool FileStorage::save(const std::vector<Credential>& credentials) const {
 }
 
 bool FileStorage::save(const std::vector<std::shared_ptr<Credential>>& credentials) const {
-    std::string actualPath=resolvePath(filePath);std::ofstream out(actualPath,std::ios::binary);if(!out)return false;
-    const char magic[4]={'V','S','Y','N'};out.write(magic,4);uint32_t version=5;out.write(reinterpret_cast<const char*>(&version),4);
-    writeString(out,username);writeString(out,masterSalt);writeString(out,masterPasswordHash);writeString(out,credSalt);writeString(out,credPasswordHash);
-    std::ostringstream buffer(std::ios::binary);serializePolymorphic(buffer,credentials);std::string bytes=buffer.str();std::vector<uint8_t> payload(bytes.begin(),bytes.end());if(cipher)payload=cipher->encrypt(payload);if(!payload.empty())out.write(reinterpret_cast<const char*>(payload.data()),payload.size());return out.good();
+    std::string actualPath = resolvePath(filePath);
+    std::ofstream out(actualPath, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+
+    const char magic[4] = {'V', 'S', 'Y', 'N'};
+    out.write(magic, sizeof(magic));
+
+    uint32_t version = 5;
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+
+    writeString(out, username);
+    writeString(out, masterSalt);
+    writeString(out, masterPasswordHash);
+    writeString(out, credSalt);
+    writeString(out, credPasswordHash);
+
+    std::ostringstream buffer(std::ios::binary);
+    serializePolymorphic(buffer, credentials);
+    std::string bytes = buffer.str();
+
+    std::vector<uint8_t> payload(bytes.begin(), bytes.end());
+    if (cipher) {
+        payload = cipher->encrypt(payload);
+    }
+
+    if (!payload.empty()) {
+        out.write(reinterpret_cast<const char*>(payload.data()), payload.size());
+    }
+
+    return out.good();
 }
 
 std::vector<std::shared_ptr<Credential>> FileStorage::loadPolymorphic() {
-    std::string actualPath=resolvePath(filePath);std::ifstream in(actualPath,std::ios::binary);if(!in)return{};
-    char magic[4]{};in.read(magic,4);if(!in||std::string(magic,4)!="VSYN")throw CorruptedVaultException("Invalid vault magic bytes");
-    uint32_t version=0;in.read(reinterpret_cast<char*>(&version),4);if(!in)throw CorruptedVaultException("Missing vault version");
-    if(version==5){username=readString(in);masterSalt=readString(in);masterPasswordHash=readString(in);credSalt=readString(in);credPasswordHash=readString(in);}
-    else throw CorruptedVaultException("Polymorphic credentials require vault version 5");
-    std::vector<uint8_t> payload((std::istreambuf_iterator<char>(in)),{});if(cipher)payload=cipher->decrypt(payload);std::string bytes(payload.begin(),payload.end());std::istringstream buffer(bytes,std::ios::binary);return deserializePolymorphic(buffer);
+    std::string actualPath = resolvePath(filePath);
+    std::ifstream in(actualPath, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+
+    char magic[4]{};
+    in.read(magic, sizeof(magic));
+    if (!in || std::string(magic, sizeof(magic)) != "VSYN") {
+        throw CorruptedVaultException("Invalid vault magic bytes");
+    }
+
+    uint32_t version = 0;
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (!in) {
+        throw CorruptedVaultException("Missing vault version");
+    }
+
+    if (version == 5) {
+        username = readString(in);
+        masterSalt = readString(in);
+        masterPasswordHash = readString(in);
+        credSalt = readString(in);
+        credPasswordHash = readString(in);
+    } else {
+        throw CorruptedVaultException("Polymorphic credentials require vault version 5");
+    }
+
+    std::vector<uint8_t> payload((std::istreambuf_iterator<char>(in)), {});
+    if (cipher) {
+        payload = cipher->decrypt(payload);
+    }
+
+    std::string bytes(payload.begin(), payload.end());
+    std::istringstream buffer(bytes, std::ios::binary);
+    return deserializePolymorphic(buffer);
 }
 
 std::vector<Credential> FileStorage::load() {

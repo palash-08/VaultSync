@@ -1,32 +1,172 @@
 #include "Credential.h"
-#include <algorithm>
-#include <cctype>
-#include <iostream>
-#include <limits>
-#include <chrono>
 #include "WebCredential.h"
 #include "WiFiCredential.h"
 #include "SSHCredential.h"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <iostream>
+#include <limits>
+
 namespace {
-void put(std::ostream& o, const std::string& s) { uint32_t n=static_cast<uint32_t>(s.size()); o.write(reinterpret_cast<const char*>(&n),4); o.write(s.data(),n); }
-std::string get(std::istream& i) { uint32_t n=0; i.read(reinterpret_cast<char*>(&n),4); if(!i||n>16*1024*1024) { i.setstate(std::ios::failbit); return {}; } std::string s(n,'\0'); if(n)i.read(&s[0],n); return s; }
-std::string lower(std::string s) { std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));}); return s; }
+
+void writeBinaryString(std::ostream& stream, const std::string& str) {
+    uint32_t length = static_cast<uint32_t>(str.size());
+    stream.write(reinterpret_cast<const char*>(&length), sizeof(length));
+    if (length > 0) {
+        stream.write(str.data(), length);
+    }
 }
-Credential::Credential(const std::string& s,const std::string& u,const std::string& p,const std::string& n,int64_t t):service(s),username(u),password(p),notes(n),createdAt(t<0?std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()):t){}
-std::string Credential::getType() const { return "generic"; }
-void Credential::display(bool show) const { std::cout<<"Service: "<<service<<"\nUsername: "<<username<<"\nPassword: "<<(show?password:"********")<<"\nNotes: "<<notes<<"\n"; }
-Credential* Credential::clone() const { return new Credential(*this); }
-void Credential::serialize(std::ostream& o) const { put(o,service);put(o,username);put(o,password);put(o,notes);o.write(reinterpret_cast<const char*>(&createdAt),sizeof(createdAt)); }
-void Credential::deserialize(std::istream& i) { service=get(i);username=get(i);password=get(i);notes=get(i);i.read(reinterpret_cast<char*>(&createdAt),sizeof(createdAt)); }
-bool Credential::matches(const std::string& q) const { auto x=lower(q); return lower(service).find(x)!=std::string::npos||lower(username).find(x)!=std::string::npos||lower(notes).find(x)!=std::string::npos; }
-const std::string& Credential::getService()const{return service;} const std::string& Credential::getUsername()const{return username;} const std::string& Credential::getPassword()const{return password;} const std::string& Credential::getNotes()const{return notes;} int64_t Credential::getCreatedAt()const{return createdAt;}
-void Credential::setService(const std::string& v){service=v;} void Credential::setUsername(const std::string& v){username=v;} void Credential::setPassword(const std::string& v){password=v;} void Credential::setNotes(const std::string& v){notes=v;}
-bool Credential::operator==(const Credential& o)const{
-    if(getType()!=o.getType()||service!=o.service||username!=o.username||password!=o.password||notes!=o.notes||createdAt!=o.createdAt)return false;
-    if(auto a=dynamic_cast<const WebCredential*>(this)){auto b=dynamic_cast<const WebCredential*>(&o);return b&&a->getUrl()==b->getUrl();}
-    if(auto a=dynamic_cast<const WiFiCredential*>(this)){auto b=dynamic_cast<const WiFiCredential*>(&o);return b&&a->getSsid()==b->getSsid()&&a->getSecurityType()==b->getSecurityType();}
-    if(auto a=dynamic_cast<const SSHCredential*>(this)){auto b=dynamic_cast<const SSHCredential*>(&o);return b&&a->getHost()==b->getHost()&&a->getPort()==b->getPort();}
+
+std::string readBinaryString(std::istream& stream) {
+    uint32_t length = 0;
+    stream.read(reinterpret_cast<char*>(&length), sizeof(length));
+    if (!stream || length > 16 * 1024 * 1024) {
+        stream.setstate(std::ios::failbit);
+        return {};
+    }
+    std::string str(length, '\0');
+    if (length > 0) {
+        stream.read(&str[0], length);
+    }
+    return str;
+}
+
+std::string toLowerCase(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return text;
+}
+
+} // namespace
+
+Credential::Credential(const std::string& service,
+                       const std::string& username,
+                       const std::string& password,
+                       const std::string& notes,
+                       int64_t createdAt)
+    : service(service),
+      username(username),
+      password(password),
+      notes(notes),
+      createdAt(createdAt < 0 ? std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) : createdAt) {
+}
+
+std::string Credential::getType() const {
+    return "generic";
+}
+
+void Credential::display(bool showPassword) const {
+    std::cout << "Service: " << service << "\n";
+    std::cout << "Username: " << username << "\n";
+    std::cout << "Password: " << (showPassword ? password : "********") << "\n";
+    std::cout << "Notes: " << notes << "\n";
+}
+
+Credential* Credential::clone() const {
+    return new Credential(*this);
+}
+
+void Credential::serialize(std::ostream& stream) const {
+    writeBinaryString(stream, service);
+    writeBinaryString(stream, username);
+    writeBinaryString(stream, password);
+    writeBinaryString(stream, notes);
+    stream.write(reinterpret_cast<const char*>(&createdAt), sizeof(createdAt));
+}
+
+void Credential::deserialize(std::istream& stream) {
+    service = readBinaryString(stream);
+    username = readBinaryString(stream);
+    password = readBinaryString(stream);
+    notes = readBinaryString(stream);
+    stream.read(reinterpret_cast<char*>(&createdAt), sizeof(createdAt));
+}
+
+bool Credential::matches(const std::string& query) const {
+    const std::string lowerQuery = toLowerCase(query);
+    return toLowerCase(service).find(lowerQuery) != std::string::npos ||
+           toLowerCase(username).find(lowerQuery) != std::string::npos ||
+           toLowerCase(notes).find(lowerQuery) != std::string::npos;
+}
+
+const std::string& Credential::getService() const {
+    return service;
+}
+
+const std::string& Credential::getUsername() const {
+    return username;
+}
+
+const std::string& Credential::getPassword() const {
+    return password;
+}
+
+const std::string& Credential::getNotes() const {
+    return notes;
+}
+
+int64_t Credential::getCreatedAt() const {
+    return createdAt;
+}
+
+void Credential::setService(const std::string& newService) {
+    service = newService;
+}
+
+void Credential::setUsername(const std::string& newUsername) {
+    username = newUsername;
+}
+
+void Credential::setPassword(const std::string& newPassword) {
+    password = newPassword;
+}
+
+void Credential::setNotes(const std::string& newNotes) {
+    notes = newNotes;
+}
+
+bool Credential::operator==(const Credential& other) const {
+    if (getType() != other.getType() ||
+        service != other.service ||
+        username != other.username ||
+        password != other.password ||
+        notes != other.notes ||
+        createdAt != other.createdAt) {
+        return false;
+    }
+
+    if (const auto* webThis = dynamic_cast<const WebCredential*>(this)) {
+        const auto* webOther = dynamic_cast<const WebCredential*>(&other);
+        return webOther != nullptr && webThis->getUrl() == webOther->getUrl();
+    }
+
+    if (const auto* wifiThis = dynamic_cast<const WiFiCredential*>(this)) {
+        const auto* wifiOther = dynamic_cast<const WiFiCredential*>(&other);
+        return wifiOther != nullptr &&
+               wifiThis->getSsid() == wifiOther->getSsid() &&
+               wifiThis->getSecurityType() == wifiOther->getSecurityType();
+    }
+
+    if (const auto* sshThis = dynamic_cast<const SSHCredential*>(this)) {
+        const auto* sshOther = dynamic_cast<const SSHCredential*>(&other);
+        return sshOther != nullptr &&
+               sshThis->getHost() == sshOther->getHost() &&
+               sshThis->getPort() == sshOther->getPort();
+    }
+
     return true;
 }
-bool Credential::operator!=(const Credential& o)const{return !(*this==o);} std::ostream& operator<<(std::ostream& o,const Credential& c){o<<"Credential("<<c.getType()<<", "<<c.service<<", "<<c.username<<")";return o;}
+
+bool Credential::operator!=(const Credential& other) const {
+    return !(*this == other);
+}
+
+std::ostream& operator<<(std::ostream& stream, const Credential& credential) {
+    stream << "Credential(" << credential.getType() << ", "
+           << credential.service << ", "
+           << credential.username << ")";
+    return stream;
+}

@@ -50,3 +50,6 @@ add_executable(test_cipher
 )
 
 target_include_directories(test_cipher PRIVATE include)
+
+enable_testing()
+add_test(NAME test_cipher COMMAND test_cipher)
