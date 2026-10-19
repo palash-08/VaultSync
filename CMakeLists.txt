@@ -10,6 +10,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenSSL REQUIRED)
 
+include(FetchContent)
+FetchContent_Declare(ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
+    GIT_TAG v5.0.0
+)
+FetchContent_MakeAvailable(ftxui)
+
 add_executable(VaultSync
     src/main.cpp
     src/Credential.cpp
@@ -31,7 +38,12 @@ add_executable(VaultSync
 )
 
 target_include_directories(VaultSync PRIVATE include)
-target_link_libraries(VaultSync PRIVATE OpenSSL::Crypto)
+target_link_libraries(VaultSync PRIVATE
+    OpenSSL::Crypto
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+)
 
 # Cipher and cryptographic test binary
 add_executable(test_cipher
