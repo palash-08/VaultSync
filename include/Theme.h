@@ -67,7 +67,9 @@ inline ButtonOption buttonOption(bool isPrimary = false) {
     opt.transform = [isPrimary](const EntryState& s) {
         auto t = text(" " + s.label + " ");
         if (s.focused) {
-            return t | bold | color(Color::Black) | bgcolor(isPrimary ? Primary : TextBright);
+            // Keep borderRounded in all states so the element size never changes
+            // (removing the border on focus was causing layout jitter on hover)
+            return t | bold | color(Color::Black) | bgcolor(isPrimary ? Primary : TextBright) | borderRounded;
         }
         if (isPrimary) {
             return t | bold | color(Primary) | borderRounded;
@@ -118,7 +120,10 @@ inline InputOption inputOption(bool isPassword = false, std::function<void()> on
                     s.element | dim | color(Subtle)
                 }) | focusCursorBarBlinking;
             } else {
-                s.element |= dim | color(Subtle);
+                s.element = hbox({
+                    text(" "),
+                    s.element | dim | color(Subtle)
+                });
             }
         } else {
             s.element |= color(TextBright);

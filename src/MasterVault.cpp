@@ -343,6 +343,8 @@ void MasterVault::lock() {
     // Step 2: Clear in-memory caches and session flags
     masterUnlocked = false;
     credUnlocked = false;
+    credFailedAttempts = 0;
+    credLockedOut = false;
     cachedCredentials.clear();
 
     // Step 3: Zero out and purge AES cipher from memory
@@ -350,6 +352,14 @@ void MasterVault::lock() {
     if (storage) {
         storage->setCipher(nullptr);
     }
+
+    // Step 4: Clear user identity and cached salts/hashes from RAM
+    username.clear();
+    vaultPath.clear();
+    masterSalt.clear();
+    masterPasswordHash.clear();
+    credSalt.clear();
+    credPasswordHash.clear();
 }
 
 bool MasterVault::addCredential(std::shared_ptr<Credential> credential) {

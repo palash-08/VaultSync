@@ -318,6 +318,34 @@ The user directed the complete FTXUI redesign of VaultSync in one cohesive pass 
 
 ---
 
+## Prompt 16: UI Hover Jitter Elimination, Component Tab Isolation, & Vault Workflow Hardening
+
+### Summary of User Prompt
+Investigation and remediation of UI interaction defects (including mouse hover button jitter caused by dimension feedback loops) and workflow bugs across Master Vault authentication, credential creation/editing modal navigation, and dashboard state management.
+
+### Key Architecture / Design Objectives
+- Eliminate hover jitter feedback loops in buttons by enforcing strict dimension invariance across normal, hover, and focused states in `Theme::buttonOption`.
+- Isolate tab components in `runMasterVaultSession` using `ftxui::Container::Tab` to prevent invisible background tabs from intercepting focus and mouse events.
+- Prevent focus traps in polymorphic Add/Edit dialogs by dynamically mounting only the inputs corresponding to the active credential type.
+- Harden session security by purging in-memory credentials, salts, hashes, and lockout counters on vault lock, and auto-locking when credential unlock is dismissed.
+- Enhance UX with automatic password field clearing on failed auth, auto-selection of newly added credentials, and search-result navigation jumps.
+
+### Orchestrator Actions & Results
+- Resolved button hover jitter in `include/Theme.h` by maintaining `borderRounded` across all states, preventing 2-row/2-column element resizing oscillations.
+- Updated `include/Theme.h` input placeholder transform with column-stable spacing between focused and unfocused states.
+- Replaced flat containers in `src/main.cpp` with `Container::Tab` for main navigation and modal polymorphic fields.
+- Implemented auto-hiding of passwords on selection changes and Enter-to-jump navigation from search results to dashboard entries.
+- Hardened `MasterVault::lock()` in `src/MasterVault.cpp` to wipe RAM caches and reset attempt counters.
+- Built cleanly and verified all 12 test suites in `test_cipher` and end-to-end interactive flows.
+
+### Artifacts and Files Involved
+- [include/Theme.h](file:///home/supreet/VaultSync/include/Theme.h)
+- [src/MasterVault.cpp](file:///home/supreet/VaultSync/src/MasterVault.cpp)
+- [src/main.cpp](file:///home/supreet/VaultSync/src/main.cpp)
+- [docs/prompts/README.md](file:///home/supreet/VaultSync/docs/prompts/README.md)
+
+---
+
 ## Summary of Completed Architecture Coverage
 
 ```text
@@ -333,5 +361,6 @@ Target Architecture Components (23 Sections)
 ├── [x] Section 20: Comprehensive Exception Hierarchy (VaultException, CorruptedVaultException, etc.)
 ├── [x] Section 3/9: Full TUI Menu Wiring & Interactive Application Flow
 ├── [x] Modern TUI: FTXUI Functional Component Interface Architecture (Phase 5)
+├── [x] UI/UX Polish: Hover Jitter Elimination, Tab Isolation & Workflow Hardening
 └── [x] Packaging & Distribution: Debian (.deb) & Custom APT Repository Architecture
 ```

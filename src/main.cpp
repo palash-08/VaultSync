@@ -146,6 +146,7 @@ bool handleLoginMasterVault(MasterVault& vault) {
             statusMessage = "Invalid master password. Attempts remaining: " + std::to_string(remainingAttempts);
             statusColor = Theme::Warning;
         }
+        password.clear(); // Clear so the user starts fresh on the next try
     };
 
     inputUser = Input(&username, "Enter username", Theme::inputOption(false, [&] {
@@ -411,6 +412,7 @@ bool ensureCredentialVaultUnlocked(MasterVault& vault) {
         } else {
             statusMessage = "Invalid password. Attempts remaining: " + std::to_string(remainingAttempts);
         }
+        credPassword.clear(); // Clear so the user starts fresh
     };
 
     inputPass = Input(&credPassword, "Enter credential vault password", Theme::inputOption(true, [&] {
@@ -552,17 +554,21 @@ bool promptCreateCredential(MasterVault& vault) {
     auto btnSave = Button("Save to Vault", saveAction, Theme::buttonOption(true));
     auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
 
+    // Dynamically activate only type-relevant inputs so hidden fields never steal keyboard focus
+    auto typeSpecificContainer = Container::Tab({
+        Container::Vertical({ inputUrl }),               // Type 0: Web
+        Container::Vertical({ inputSsid, inputSec }),    // Type 1: WiFi
+        Container::Vertical({ inputHost, inputPort }),   // Type 2: SSH
+        Container::Vertical({}),                         // Type 3: Generic
+    }, &selectedType);
+
     auto container = Container::Vertical({
         radioType,
         inputService,
         inputUser,
         inputPass,
         inputNotes,
-        inputUrl,
-        inputSsid,
-        inputSec,
-        inputHost,
-        inputPort,
+        typeSpecificContainer,
         Container::Horizontal({ btnSave, btnCancel }),
     });
 
@@ -721,18 +727,26 @@ void handleEditCredential(MasterVault& vault, size_t index) {
     auto btnSave = Button("Save Changes", saveAction, Theme::buttonOption(true));
     auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
 
-    auto container = Container::Vertical({
+    Components formComponents = {
         inputService,
         inputUser,
         inputPass,
         inputNotes,
-        inputUrl,
-        inputSsid,
-        inputSec,
-        inputHost,
-        inputPort,
-        Container::Horizontal({ btnSave, btnCancel }),
-    });
+    };
+
+    if (working->getType() == "web") {
+        formComponents.push_back(inputUrl);
+    } else if (working->getType() == "wifi") {
+        formComponents.push_back(inputSsid);
+        formComponents.push_back(inputSec);
+    } else if (working->getType() == "ssh") {
+        formComponents.push_back(inputHost);
+        formComponents.push_back(inputPort);
+    }
+
+    formComponents.push_back(Container::Horizontal({ btnSave, btnCancel }));
+
+    auto container = Container::Vertical(std::move(formComponents));
 
     auto renderer = Renderer(container, [&] {
         Elements form;
@@ -817,6 +831,7 @@ bool handleDeleteCredential(MasterVault& vault, size_t index) {
             errorMsg = "Maximum attempts exceeded. Deletion denied.";
             exit();
         }
+        authPassword.clear(); // Clear so the user starts fresh
     };
 
     inputAuth = Input(&authPassword, "Credential vault password", Theme::inputOption(true, [&] {
@@ -865,6 +880,7 @@ bool handleDeleteCredential(MasterVault& vault, size_t index) {
  */
 void runMasterVaultSession(MasterVault& vault) {
     if (!ensureCredentialVaultUnlocked(vault)) {
+        vault.lock();
         return;
     }
 
@@ -883,6 +899,7 @@ void runMasterVaultSession(MasterVault& vault) {
 
     // --- Tab 0: Credentials Split View State ---
     int selectedCredIndex = 0;
+    int previousCredIndex = -1; // Track selection changes to auto-hide password
     bool showPassword = false;
     std::vector<std::string> credentialLabels;
 
@@ -908,6 +925,12 @@ void runMasterVaultSession(MasterVault& vault) {
     auto btnAddCred = Button("+ Add Credential", [&] {
         if (promptCreateCredential(vault)) {
             refreshCredentialLabels();
+            auto creds = vault.getPolymorphicCredentials();
+            if (!creds.empty()) {
+                selectedCredIndex = static_cast<int>(creds.size()) - 1;
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
+            }
         }
     }, Theme::buttonOption(true));
 
@@ -927,10 +950,9 @@ void runMasterVaultSession(MasterVault& vault) {
         auto creds = vault.getPolymorphicCredentials();
         if (!creds.empty() && selectedCredIndex >= 0 && selectedCredIndex < static_cast<int>(creds.size())) {
             if (handleDeleteCredential(vault, selectedCredIndex)) {
-                if (selectedCredIndex > 0) {
-                    selectedCredIndex--;
-                }
                 refreshCredentialLabels();
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
             }
         }
     }, Theme::buttonOption(false));
@@ -965,7 +987,24 @@ void runMasterVaultSession(MasterVault& vault) {
 
     auto btnRunSearch = Button("Search", runSearchAction, Theme::buttonOption(true));
 
-    auto searchMenu = Menu(&searchLabels, &selectedSearchIndex, Theme::menuOption());
+    auto searchMenu = Menu(&searchLabels, &selectedSearchIndex, Theme::menuOption([&] {
+        // Jump directly to matching credential in Tab 0 on Enter
+        if (!currentSearchResults.empty() &&
+            selectedSearchIndex >= 0 &&
+            selectedSearchIndex < static_cast<int>(currentSearchResults.size())) {
+            const auto& target = currentSearchResults[selectedSearchIndex];
+            auto allCreds = vault.getPolymorphicCredentials();
+            for (size_t i = 0; i < allCreds.size(); ++i) {
+                if (allCreds[i] == target) {
+                    selectedCredIndex = static_cast<int>(i);
+                    showPassword = false;
+                    previousCredIndex = selectedCredIndex;
+                    selectedTab = 0;
+                    break;
+                }
+            }
+        }
+    }));
 
     // --- Tab 2: Password Tools State ---
     std::string genLengthStr = "16";
@@ -1033,24 +1072,37 @@ void runMasterVaultSession(MasterVault& vault) {
 
     auto btnEval = Button("Evaluate Strength", evalAction, Theme::buttonOption(false));
 
-    // Combine all components into top-level container
+    // Tab-isolated component containers
+    auto tab0Container = Container::Horizontal({
+        Container::Vertical({ credMenu, btnAddCred }),
+        Container::Vertical({ btnToggleShow, btnEdit, btnDelete }),
+    });
+
+    auto tab1Container = Container::Vertical({
+        Container::Horizontal({ inputSearch, btnRunSearch }),
+        searchMenu,
+    });
+
+    auto tab2Container = Container::Horizontal({
+        Container::Vertical({ inputGenLen, checkUpper, checkLower, checkDigits, checkSymbols, btnGenerate }),
+        Container::Vertical({ inputEval, btnEval }),
+    });
+
+    auto tab3Container = Container::Vertical({}); // Tab 3: Security Audit is display-only
+    auto tab4Container = Container::Vertical({}); // Tab 4: Lock & Logout
+
+    auto tabContainer = Container::Tab({
+        tab0Container,
+        tab1Container,
+        tab2Container,
+        tab3Container,
+        tab4Container,
+    }, &selectedTab);
+
+    // Combine top-level tab bar and active tab container
     auto mainContainer = Container::Vertical({
         tabMenu,
-        // Tab 0 components
-        Container::Horizontal({
-            Container::Vertical({ credMenu, btnAddCred }),
-            Container::Vertical({ btnToggleShow, btnEdit, btnDelete }),
-        }),
-        // Tab 1 components
-        Container::Vertical({
-            Container::Horizontal({ inputSearch, btnRunSearch }),
-            searchMenu,
-        }),
-        // Tab 2 components
-        Container::Horizontal({
-            Container::Vertical({ inputGenLen, checkUpper, checkLower, checkDigits, checkSymbols, btnGenerate }),
-            Container::Vertical({ inputEval, btnEval }),
-        }),
+        tabContainer,
     });
 
     auto renderer = Renderer(mainContainer, [&] {
@@ -1076,6 +1128,12 @@ void runMasterVaultSession(MasterVault& vault) {
         if (selectedTab == 0) {
             // === TAB 0: Credentials Split View ===
             auto creds = vault.getPolymorphicCredentials();
+
+            // Auto-hide password when selecting a different credential
+            if (selectedCredIndex != previousCredIndex) {
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
+            }
 
             // Left Pane: List
             auto leftPane = vbox({
