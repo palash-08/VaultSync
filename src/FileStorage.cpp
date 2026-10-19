@@ -284,24 +284,40 @@ std::vector<std::shared_ptr<Credential>> FileStorage::loadPolymorphic() {
         throw CorruptedVaultException("Missing vault version");
     }
 
-    if (version == 5) {
+    if (version == 5 || version == 4) {
         username = readString(in);
         masterSalt = readString(in);
         masterPasswordHash = readString(in);
         credSalt = readString(in);
         credPasswordHash = readString(in);
     } else {
-        throw CorruptedVaultException("Polymorphic credentials require vault version 5");
+        throw CorruptedVaultException("Unsupported vault version for polymorphic loading");
     }
 
     std::vector<uint8_t> payload((std::istreambuf_iterator<char>(in)), {});
+    if (payload.empty()) {
+        return {};
+    }
+
     if (cipher) {
         payload = cipher->decrypt(payload);
     }
 
     std::string bytes(payload.begin(), payload.end());
     std::istringstream buffer(bytes, std::ios::binary);
-    return deserializePolymorphic(buffer);
+
+    if (version == 5) {
+        return deserializePolymorphic(buffer);
+    } else {
+        // Backward compatibility: Convert legacy flat credentials to shared pointers
+        std::vector<Credential> flatCredentials = deserializeCredentials(buffer);
+        std::vector<std::shared_ptr<Credential>> result;
+        result.reserve(flatCredentials.size());
+        for (auto& item : flatCredentials) {
+            result.push_back(std::make_shared<Credential>(std::move(item)));
+        }
+        return result;
+    }
 }
 
 std::vector<Credential> FileStorage::load() {
@@ -357,6 +373,19 @@ std::vector<Credential> FileStorage::load() {
 
     std::string decryptedStr(payload.begin(), payload.end());
     std::istringstream buffer(decryptedStr, std::ios::binary);
+
+    if (version == 5) {
+        // Convert polymorphic credentials to flat values for legacy callers
+        std::vector<std::shared_ptr<Credential>> poly = deserializePolymorphic(buffer);
+        result.reserve(poly.size());
+        for (const auto& item : poly) {
+            if (item) {
+                result.push_back(*item);
+            }
+        }
+        return result;
+    }
+
     return deserializeCredentials(buffer);
 }
 

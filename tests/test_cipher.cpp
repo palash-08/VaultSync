@@ -23,6 +23,7 @@
 #include "PasswordGenerator.h"
 #include "PasswordStrength.h"
 #include "PasswordAnalyzer.h"
+#include "AESCipher.h"
 
 namespace fs = std::filesystem;
 
@@ -539,10 +540,275 @@ void testMasterVaultLoginAttemptsAndLockout() {
     std::cout << "  --> PASS: 3-attempt lockout, user-scoping, and reset behavior verified.\n\n";
 }
 
+void testAESCipherRoundtripAndRandomization() {
+    std::cout << "[Test 10] AES-256-GCM Roundtrip and Nonce Randomization\n";
+
+    std::string keyString = "VaultSyncAES256ProductionKey2026";
+    std::unique_ptr<ICipher> cipher = std::make_unique<AESCipher>(keyString);
+
+    // 1. Text roundtrip
+    std::string originalText = "TopSecretAESGCMPlaintext!2026";
+    std::vector<uint8_t> plaintext(originalText.begin(), originalText.end());
+
+    std::vector<uint8_t> ciphertext1 = cipher->encrypt(plaintext);
+    assert(ciphertext1 != plaintext && "Ciphertext must not match plaintext!");
+    assert(ciphertext1.size() == AESCipher::OVERHEAD_SIZE + plaintext.size() &&
+           "Ciphertext payload size must equal overhead (12 IV + 16 Tag) + plaintext length!");
+
+    std::vector<uint8_t> decrypted1 = cipher->decrypt(ciphertext1);
+    std::string decryptedText1(decrypted1.begin(), decrypted1.end());
+    assert(decrypted1 == plaintext && "Decrypted bytes must match original plaintext!");
+    assert(decryptedText1 == originalText && "Decrypted string must match original text!");
+
+    // 2. Randomization across runs for identical plaintext (due to unique IVs)
+    std::vector<uint8_t> ciphertext2 = cipher->encrypt(plaintext);
+    assert(ciphertext1 != ciphertext2 &&
+           "Ciphertext must be randomized across runs for identical plaintext due to unique IVs!");
+    assert(ciphertext1.size() == ciphertext2.size());
+
+    // Verify IVs differ
+    bool ivsDiffer = !std::equal(ciphertext1.begin(), ciphertext1.begin() + AESCipher::IV_SIZE, ciphertext2.begin());
+    assert(ivsDiffer && "Distinct encryptions must use distinct random IVs!");
+
+    std::vector<uint8_t> decrypted2 = cipher->decrypt(ciphertext2);
+    assert(decrypted2 == plaintext && "Both randomized ciphertexts must decrypt to the original plaintext!");
+
+    // 3. Binary data roundtrip (including null and boundary bytes)
+    std::vector<uint8_t> binaryData = {0x00, 0xFF, 0x7F, 0x80, 0xAA, 0x55, 0x01, 0xFE, 0x00, 0x42};
+    std::vector<uint8_t> binaryCiphertext = cipher->encrypt(binaryData);
+    std::vector<uint8_t> binaryDecrypted = cipher->decrypt(binaryCiphertext);
+    assert(binaryDecrypted == binaryData && "Binary payload must roundtrip cleanly through AES-256-GCM!");
+
+    // 4. Non-32-byte key handling (SHA-256 derivation)
+    AESCipher shortKeyCipher("ShortKey");
+    assert(shortKeyCipher.getKey().size() == 32 && "Key must be normalized/derived to 32 bytes!");
+    std::vector<uint8_t> shortKeyCiphertext = shortKeyCipher.encrypt(plaintext);
+    std::vector<uint8_t> shortKeyDecrypted = shortKeyCipher.decrypt(shortKeyCiphertext);
+    assert(shortKeyDecrypted == plaintext && "Derived 32-byte key must successfully encrypt and decrypt!");
+
+    std::cout << "  --> PASS: AES-256-GCM roundtrip and IV randomization verified.\n\n";
+}
+
+void testAESCipherAuthenticationAndTamperDetection() {
+    std::cout << "[Test 11] AES-256-GCM Authentication, Wrong Key & Tamper Detection\n";
+
+    AESCipher cipherA("MasterKeyA_123456789012345678901");
+    AESCipher cipherB("DifferentKeyB_098765432109876543");
+
+    std::string originalText = "SensitiveInformationToProtectFromTampering";
+    std::vector<uint8_t> plaintext(originalText.begin(), originalText.end());
+    std::vector<uint8_t> validCiphertext = cipherA.encrypt(plaintext);
+
+    // 1. Wrong key decryption fails and throws CorruptedVaultException
+    bool wrongKeyCaught = false;
+    try {
+        cipherB.decrypt(validCiphertext);
+    } catch (const CorruptedVaultException&) {
+        wrongKeyCaught = true;
+    }
+    assert(wrongKeyCaught && "Decryption with incorrect key must throw CorruptedVaultException!");
+
+    // 2. Tampered ciphertext portion fails authentication
+    std::vector<uint8_t> tamperedCiphertext = validCiphertext;
+    tamperedCiphertext[AESCipher::OVERHEAD_SIZE] ^= 0x01; // flip 1 bit in ciphertext
+    bool ciphertextTamperCaught = false;
+    try {
+        cipherA.decrypt(tamperedCiphertext);
+    } catch (const CorruptedVaultException&) {
+        ciphertextTamperCaught = true;
+    }
+    assert(ciphertextTamperCaught && "Flipping a bit in ciphertext must fail authentication and throw CorruptedVaultException!");
+
+    // 3. Tampered GCM authentication tag fails authentication
+    std::vector<uint8_t> tamperedTag = validCiphertext;
+    tamperedTag[AESCipher::IV_SIZE + 4] ^= 0x01; // flip 1 bit in GCM tag
+    bool tagTamperCaught = false;
+    try {
+        cipherA.decrypt(tamperedTag);
+    } catch (const CorruptedVaultException&) {
+        tagTamperCaught = true;
+    }
+    assert(tagTamperCaught && "Flipping a bit in authentication tag must fail authentication and throw CorruptedVaultException!");
+
+    // 4. Tampered IV fails authentication
+    std::vector<uint8_t> tamperedIV = validCiphertext;
+    tamperedIV[0] ^= 0x01; // flip 1 bit in IV
+    bool ivTamperCaught = false;
+    try {
+        cipherA.decrypt(tamperedIV);
+    } catch (const CorruptedVaultException&) {
+        ivTamperCaught = true;
+    }
+    assert(ivTamperCaught && "Flipping a bit in IV must fail authentication and throw CorruptedVaultException!");
+
+    // 5. Truncated payload (< 28 bytes) throws CorruptedVaultException
+    std::vector<uint8_t> truncatedPayload(validCiphertext.begin(), validCiphertext.begin() + 20);
+    bool truncationCaught = false;
+    try {
+        cipherA.decrypt(truncatedPayload);
+    } catch (const CorruptedVaultException&) {
+        truncationCaught = true;
+    }
+    assert(truncationCaught && "Truncated payload (< 28 bytes) must throw CorruptedVaultException!");
+
+    // 6. Integration with FileStorage
+    const std::string testVaultPath = "data/test_aes_storage.bin";
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    auto aesCipher = std::make_shared<AESCipher>("FileStorageAESProductionKey");
+    FileStorage storage(testVaultPath, aesCipher);
+
+    std::vector<std::shared_ptr<Credential>> credentials = {
+        std::make_shared<WebCredential>("GitHub", "alice", "super_secret_github_pass", "token", "https://github.com"),
+        std::make_shared<WiFiCredential>("OfficeNet", "wpa", "office_wpa3_key", "guest", "OfficeNet", "WPA3")
+    };
+
+    assert(storage.save(credentials) && "FileStorage must successfully save credentials using AESCipher!");
+
+    // Verify plaintext password is NOT in raw file
+    std::ifstream rawFile(testVaultPath, std::ios::binary);
+    std::string fileBytes((std::istreambuf_iterator<char>(rawFile)), std::istreambuf_iterator<char>());
+    rawFile.close();
+
+    assert(fileBytes.find("super_secret_github_pass") == std::string::npos &&
+           "Plaintext password must NOT appear in raw AES-encrypted storage file!");
+    assert(fileBytes.find("office_wpa3_key") == std::string::npos &&
+           "Plaintext WiFi password must NOT appear in raw AES-encrypted storage file!");
+
+    // Load and verify credentials decrypted accurately
+    auto restored = storage.loadPolymorphic();
+    assert(restored.size() == 2);
+    assert(restored[0]->getService() == "GitHub");
+    assert(restored[0]->getPassword() == "super_secret_github_pass");
+    assert(restored[1]->getService() == "OfficeNet");
+    assert(restored[1]->getPassword() == "office_wpa3_key");
+
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: Authentication, wrong key rejection, tamper detection, and FileStorage integration verified.\n\n";
+}
+
+void testMasterVaultAESAndProxyIntegration() {
+    std::cout << "[Test 12] MasterVault AES-256-GCM & VaultProxy Integration\n";
+
+    const std::string testUser = "testuser_phase3";
+    const std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    MasterVault vault;
+    std::string masterPass = "MasterPhase3Secret#2026";
+    std::string credPass = "CredPhase3Secret#2026";
+
+    // 1. Create vault
+    assert(vault.create(testUser, masterPass));
+    assert(MasterVault::existsForUser(testUser));
+
+    // 2. VaultProxy should reject access when vault is locked
+    bool unauthorizedCaught = false;
+    try {
+        vault.getProxy().getCredentials();
+    } catch (const UnauthorizedAccessException&) {
+        unauthorizedCaught = true;
+    }
+    assert(unauthorizedCaught && "Accessing credentials via VaultProxy before unlock must throw UnauthorizedAccessException!");
+
+    // 3. Setup credential password (switches to AESCipher)
+    assert(vault.setupCredentialPassword(credPass));
+    assert(vault.isCredentialsUnlocked());
+
+    // 4. Add polymorphic credentials
+    auto webCred = std::make_shared<WebCredential>("GitHub", "alice", "gh_token_xyz999", "api token", "https://github.com");
+    auto wifiCred = std::make_shared<WiFiCredential>("HomeWiFi", "", "wpa3_super_pass", "living room", "HomeNet_5G", "WPA3");
+    auto sshCred = std::make_shared<SSHCredential>("ProdServer", "ubuntu", "id_ed25519_pass", "bastion", "prod.example.com", 2222);
+
+    assert(vault.addCredential(webCred));
+    assert(vault.addCredential(wifiCred));
+    assert(vault.addCredential(sshCred));
+    assert(vault.getCredentialCount() == 3);
+
+    // 5. Search credentials across different polymorphic fields
+    auto searchUrl = vault.search("github.com");
+    assert(searchUrl.size() == 1);
+    assert(searchUrl[0]->getService() == "GitHub");
+
+    auto searchSsid = vault.search("HomeNet_5G");
+    assert(searchSsid.size() == 1);
+    assert(searchSsid[0]->getService() == "HomeWiFi");
+
+    auto searchHost = vault.search("prod.example.com");
+    assert(searchHost.size() == 1);
+    assert(searchHost[0]->getService() == "ProdServer");
+
+    // 6. Direct VaultProxy operations when authenticated
+    auto proxyCreds = vault.getProxy().getCredentials();
+    assert(proxyCreds.size() == 3);
+
+    // 7. Verify file on disk is encrypted with AES-256-GCM and contains no plaintext
+    std::ifstream raw(testVaultPath, std::ios::binary);
+    std::string rawBytes((std::istreambuf_iterator<char>(raw)), std::istreambuf_iterator<char>());
+    raw.close();
+
+    assert(rawBytes.find("gh_token_xyz999") == std::string::npos && "Plaintext web password must NOT appear in AES file!");
+    assert(rawBytes.find("wpa3_super_pass") == std::string::npos && "Plaintext wifi password must NOT appear in AES file!");
+    assert(rawBytes.find("id_ed25519_pass") == std::string::npos && "Plaintext ssh password must NOT appear in AES file!");
+    assert(rawBytes.find("https://github.com") == std::string::npos && "Plaintext URL must NOT appear in AES file!");
+
+    // 8. Lock vault and verify in-memory cleanup
+    vault.lock();
+    assert(!vault.isMasterUnlocked());
+    assert(!vault.isCredentialsUnlocked());
+    assert(vault.getCredentialCount() == 0);
+
+    bool lockedProxyAccessBlocked = false;
+    try {
+        vault.getProxy().getCredentials();
+    } catch (const UnauthorizedAccessException&) {
+        lockedProxyAccessBlocked = true;
+    }
+    assert(lockedProxyAccessBlocked && "VaultProxy must throw UnauthorizedAccessException after lock()!");
+
+    // 9. Reload vault from disk with new MasterVault instance
+    MasterVault reloadedVault;
+    int attempts = 0;
+    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
+    assert(reloadedVault.unlockCredentials(credPass, attempts));
+    assert(reloadedVault.isCredentialsUnlocked());
+    assert(reloadedVault.getCredentialCount() == 3);
+
+    // 10. Verify polymorphic downcasting and restored attributes
+    auto restoredCreds = reloadedVault.getPolymorphicCredentials();
+    assert(restoredCreds.size() == 3);
+
+    auto restoredWeb = std::dynamic_pointer_cast<WebCredential>(restoredCreds[0]);
+    assert(restoredWeb != nullptr);
+    assert(restoredWeb->getType() == "web");
+    assert(restoredWeb->getUrl() == "https://github.com");
+    assert(restoredWeb->getPassword() == "gh_token_xyz999");
+
+    auto restoredWiFi = std::dynamic_pointer_cast<WiFiCredential>(restoredCreds[1]);
+    assert(restoredWiFi != nullptr);
+    assert(restoredWiFi->getType() == "wifi");
+    assert(restoredWiFi->getSsid() == "HomeNet_5G");
+    assert(restoredWiFi->getSecurityType() == "WPA3");
+
+    auto restoredSSH = std::dynamic_pointer_cast<SSHCredential>(restoredCreds[2]);
+    assert(restoredSSH != nullptr);
+    assert(restoredSSH->getType() == "ssh");
+    assert(restoredSSH->getHost() == "prod.example.com");
+    assert(restoredSSH->getPort() == 2222);
+
+    // 11. Cleanup test file
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: MasterVault AES-256-GCM encryption, VaultProxy access control, and polymorphic persistence verified.\n\n";
+}
+
 int main() {
-    std::cout << "========================================\n";
-    std::cout << "  VaultSync: ICipher & XORCipher Tests  \n";
-    std::cout << "========================================\n\n";
+    std::cout << "=====================================================\n";
+    std::cout << "  VaultSync: Cryptographic Tests (XOR & AES-256-GCM)  \n";
+    std::cout << "=====================================================\n\n";
 
     testBasicXORRoundtrip();
     testBinaryDataRoundtrip();
@@ -553,7 +819,11 @@ int main() {
     testMasterVaultDeleteCredential();
     testMasterVaultLoginAttemptsAndLockout();
     testArchitectureComponents();
+    testAESCipherRoundtripAndRandomization();
+    testAESCipherAuthenticationAndTamperDetection();
+    testMasterVaultAESAndProxyIntegration();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;
 }
+

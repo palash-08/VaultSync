@@ -39,6 +39,18 @@ public:
      */
     static SecurityScore securityScore(const std::vector<std::shared_ptr<Credential>>& credentials,
                                        int maxAgeDays = 365);
+
+    /**
+     * @brief Alias for securityScore(), performing full health analysis on credential collection.
+     * @param credentials The collection of credentials to analyze.
+     * @param maxAgeDays Maximum permitted password age in days before flagging as old (default: 365).
+     * @return A SecurityScore structure containing score, reused count, and old count.
+     */
+    static SecurityScore analyze(const std::vector<std::shared_ptr<Credential>>& credentials,
+                                 int maxAgeDays = 365) {
+        return securityScore(credentials, maxAgeDays);
+    }
 };
+
 
 #endif // PASSWORD_ANALYZER_H

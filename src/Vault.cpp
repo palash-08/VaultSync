@@ -47,3 +47,15 @@ bool Vault::isLocked() const {
 void Vault::unlock() {
     locked = false;
 }
+
+void Vault::clear() {
+    // Wipes all credential pointers from the in-memory repository
+    credentials.clear();
+}
+
+size_t Vault::size() const {
+    if (locked) {
+        return 0;
+    }
+    return credentials.size();
+}

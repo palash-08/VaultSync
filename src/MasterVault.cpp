@@ -1,19 +1,25 @@
 #include "MasterVault.h"
+#include "AESCipher.h"
 #include "CryptoUtils.h"
-#include "XORCipher.h"
-#include <filesystem>
+#include "VaultExceptions.h"
+
 #include <chrono>
+#include <filesystem>
 #include <unordered_map>
 
 namespace fs = std::filesystem;
 
 namespace {
 
+/**
+ * @brief Thread-safe or session-wide record tracking failed master login attempts and lockout timers.
+ */
 struct LockoutRecord {
     int failedAttempts = 0;
     std::chrono::steady_clock::time_point lockoutEnd{};
 };
 
+// Global map tracking temporary lockouts across different usernames
 std::unordered_map<std::string, LockoutRecord> g_userLockouts;
 
 } // anonymous namespace
@@ -26,11 +32,20 @@ MasterVault::MasterVault(const std::string& path)
       credUnlocked(false),
       credFailedAttempts(0),
       credLockedOut(false),
-      storage(nullptr)
+      cipher(nullptr),
+      storage(nullptr),
+      vault(std::make_unique<Vault>()),
+      proxy(std::make_unique<VaultProxy>(*vault, false))
 {
+    // If a custom path was provided upon construction, initialize file storage
     if (!path.empty()) {
         storage = std::make_unique<FileStorage>(path, nullptr);
     }
+}
+
+MasterVault::~MasterVault() {
+    // Secure cleanup: wipe decrypted credentials and cipher keys from memory when destroyed
+    lock();
 }
 
 std::string MasterVault::getVaultPathForUser(const std::string& username) {
@@ -46,6 +61,7 @@ bool MasterVault::exists(const std::string& path) {
     if (fs::exists(path)) {
         return true;
     }
+    // Also check parent directory in case binary runs from build/ directory
     if (fs::exists("../" + path)) {
         return true;
     }
@@ -53,26 +69,32 @@ bool MasterVault::exists(const std::string& path) {
 }
 
 bool MasterVault::create(const std::string& user, const std::string& masterPassword) {
+    // Step 1: Validate inputs
     if (user.empty() || masterPassword.empty()) {
         return false;
     }
 
+    // Step 2: Prevent duplicate creation if a vault already exists for this username
     if (existsForUser(user)) {
-        return false; // Prevent duplicate creation
+        return false;
     }
 
     username = user;
     vaultPath = getVaultPathForUser(username);
 
-    // Generate salt and compute salted master password hash
+    // Step 3: Generate a random 16-byte salt and hash the master password with SHA-256
     masterSalt = CryptoUtils::generateSalt(16);
     masterPasswordHash = CryptoUtils::hashPassword(masterPassword, masterSalt);
 
-    // Credential vault password is NOT configured at creation time
+    // Step 4: Credential vault password is NOT set at creation time (delayed setup)
     credSalt.clear();
     credPasswordHash.clear();
-    credentials.clear();
 
+    // Step 5: Clear any existing in-memory credentials
+    vault->clear();
+    syncLegacyCache();
+
+    // Step 6: Initialize file storage and write vault metadata (credentials start empty)
     storage = std::make_unique<FileStorage>(vaultPath, nullptr);
     storage->setUsername(username);
     storage->setMasterSalt(masterSalt);
@@ -80,7 +102,8 @@ bool MasterVault::create(const std::string& user, const std::string& masterPassw
     storage->setCredSalt("");
     storage->setCredPasswordHash("");
 
-    bool saved = storage->save(credentials);
+    // Persist empty vault header (version 5 format)
+    bool saved = storage->save(vault->getCredentials());
     if (saved) {
         masterUnlocked = true;
         masterFailedAttempts = 0;
@@ -88,43 +111,49 @@ bool MasterVault::create(const std::string& user, const std::string& masterPassw
         credUnlocked = false;
         credFailedAttempts = 0;
         credLockedOut = false;
+        proxy->setAuthenticated(false);
     }
     return saved;
 }
 
 bool MasterVault::unlockMaster(const std::string& user, const std::string& masterPassword, int& attemptsRemaining) {
+    // Step 1: Validate input parameters
     if (user.empty() || masterPassword.empty()) {
         attemptsRemaining = 0;
         return false;
     }
 
+    // Step 2: Check if this user is currently locked out from too many failed attempts
     int remainingSeconds = 0;
     if (isMasterLockedOut(user, remainingSeconds)) {
         attemptsRemaining = 0;
         return false;
     }
 
+    // Step 3: Ensure vault file exists
     if (!existsForUser(user)) {
         attemptsRemaining = 0;
         return false;
     }
 
+    // Step 4: Read file header from disk
     username = user;
     vaultPath = getVaultPathForUser(username);
     storage = std::make_unique<FileStorage>(vaultPath, nullptr);
 
-    std::string u, s1, h1, s2, h2;
+    std::string storedUser, salt1, hash1, salt2, hash2;
     uint32_t version = 0;
-    if (!storage->readHeader(u, s1, h1, s2, h2, version)) {
+    if (!storage->readHeader(storedUser, salt1, hash1, salt2, hash2, version)) {
         attemptsRemaining = 0;
         return false;
     }
 
-    masterSalt = s1;
-    masterPasswordHash = h1;
-    credSalt = s2;
-    credPasswordHash = h2;
+    masterSalt = salt1;
+    masterPasswordHash = hash1;
+    credSalt = salt2;
+    credPasswordHash = hash2;
 
+    // Step 5: Verify master password against the stored salted hash
     if (CryptoUtils::verifyPassword(masterPassword, masterSalt, masterPasswordHash)) {
         masterUnlocked = true;
         masterFailedAttempts = 0;
@@ -134,12 +163,13 @@ bool MasterVault::unlockMaster(const std::string& user, const std::string& maste
         credLockedOut = false;
         attemptsRemaining = 3;
 
-        // Reset user failed attempts & lockout state on successful login
+        // Reset lockout tracking on successful login
         g_userLockouts[user].failedAttempts = 0;
         g_userLockouts[user].lockoutEnd = std::chrono::steady_clock::time_point{};
         return true;
     }
 
+    // Step 6: On failed login, increment attempt counter and apply temporary lockout if >= 3
     auto& record = g_userLockouts[user];
     record.failedAttempts++;
     masterFailedAttempts = record.failedAttempts;
@@ -171,7 +201,7 @@ bool MasterVault::isMasterLockedOut(const std::string& username, int& remainingS
         return true;
     }
 
-    // Lockout expired: reset failed attempts counter
+    // Lockout has expired: reset counter
     if (it->second.failedAttempts >= 3) {
         it->second.failedAttempts = 0;
         it->second.lockoutEnd = std::chrono::steady_clock::time_point{};
@@ -197,22 +227,25 @@ bool MasterVault::hasCredentialPassword() const {
 }
 
 bool MasterVault::setupCredentialPassword(const std::string& credPassword) {
+    // Step 1: Ensure user is logged into the Master Vault
     if (!masterUnlocked || credPassword.empty()) {
         return false;
     }
 
-    // Verify Credential Vault password differs from Master Vault password
+    // Step 2: Enforce security rule: Credential Vault password cannot match Master Vault password
     if (CryptoUtils::verifyPassword(credPassword, masterSalt, masterPasswordHash)) {
         return false;
     }
 
+    // Step 3: Generate a unique 16-byte salt and hash the credential password
     credSalt = CryptoUtils::generateSalt(16);
     credPasswordHash = CryptoUtils::hashPassword(credPassword, credSalt);
 
-    // Derive encryption key solely from credential password
+    // Step 4: Derive a 256-bit encryption key and initialize the AES-256-GCM cipher
     std::string encryptionKey = CryptoUtils::deriveKey(credPassword, credSalt);
-    cipher = std::make_shared<XORCipher>(encryptionKey);
+    cipher = std::make_shared<AESCipher>(encryptionKey);
 
+    // Step 5: Configure storage with the AES cipher and header credentials
     storage->setCipher(cipher);
     storage->setUsername(username);
     storage->setMasterSalt(masterSalt);
@@ -220,32 +253,35 @@ bool MasterVault::setupCredentialPassword(const std::string& credPassword) {
     storage->setCredSalt(credSalt);
     storage->setCredPasswordHash(credPasswordHash);
 
+    // Step 6: Unlock the inner vault and authorize VaultProxy for access
+    vault->unlock();
+    proxy->setAuthenticated(true);
     credUnlocked = true;
     credFailedAttempts = 0;
     credLockedOut = false;
 
-    return storage->save(credentials);
+    // Step 7: Persist encrypted initial vault file to disk
+    return saveToDisk();
 }
 
 bool MasterVault::unlockCredentials(const std::string& credPassword, int& attemptsRemaining) {
-    if (!masterUnlocked || credLockedOut || credPassword.empty()) {
+    // Step 1: Verify prerequisites
+    if (!masterUnlocked || credLockedOut || credPassword.empty() || credPasswordHash.empty()) {
         attemptsRemaining = 0;
         return false;
     }
 
-    if (credPasswordHash.empty()) {
-        attemptsRemaining = 0;
-        return false;
-    }
-
+    // Step 2: Verify password against the stored salted hash
     if (CryptoUtils::verifyPassword(credPassword, credSalt, credPasswordHash)) {
         credUnlocked = true;
         credFailedAttempts = 0;
         credLockedOut = false;
         attemptsRemaining = 3;
 
+        // Step 3: Derive 256-bit encryption key and initialize AES-256-GCM cipher
         std::string encryptionKey = CryptoUtils::deriveKey(credPassword, credSalt);
-        cipher = std::make_shared<XORCipher>(encryptionKey);
+        cipher = std::make_shared<AESCipher>(encryptionKey);
+
         storage->setCipher(cipher);
         storage->setUsername(username);
         storage->setMasterSalt(masterSalt);
@@ -253,10 +289,29 @@ bool MasterVault::unlockCredentials(const std::string& credPassword, int& attemp
         storage->setCredSalt(credSalt);
         storage->setCredPasswordHash(credPasswordHash);
 
-        credentials = storage->load();
+        // Step 4: Unlock inner vault and authorize VaultProxy
+        vault->unlock();
+        proxy->setAuthenticated(true);
+
+        // Step 5: Decrypt and load credentials from disk into the repository
+        try {
+            vault->clear();
+            auto loaded = storage->loadPolymorphic();
+            for (const auto& item : loaded) {
+                vault->addCredential(item);
+            }
+            syncLegacyCache();
+        } catch (const VaultException&) {
+            // Decryption failure, tamper detection, or corrupt payload
+            lock();
+            attemptsRemaining = 0;
+            return false;
+        }
+
         return true;
     }
 
+    // Step 6: Handle failed credential vault login attempt
     credFailedAttempts++;
     attemptsRemaining = 3 - credFailedAttempts;
     if (attemptsRemaining <= 0) {
@@ -276,84 +331,198 @@ void MasterVault::resetCredentialsAttempts() {
 }
 
 void MasterVault::lock() {
+    // Step 1: Revoke VaultProxy authorization and lock inner vault
+    if (proxy) {
+        proxy->lock();
+    }
+    if (vault) {
+        vault->clear();
+        vault->lock();
+    }
+
+    // Step 2: Clear in-memory caches and session flags
     masterUnlocked = false;
     credUnlocked = false;
-    credentials.clear();
+    cachedCredentials.clear();
+
+    // Step 3: Zero out and purge AES cipher from memory
     cipher.reset();
     if (storage) {
         storage->setCipher(nullptr);
     }
 }
 
-bool MasterVault::addCredential(const Credential& credential) {
-    if (!masterUnlocked || !credUnlocked || !storage || !cipher) {
+bool MasterVault::addCredential(std::shared_ptr<Credential> credential) {
+    if (!masterUnlocked || !credUnlocked || !credential) {
         return false;
     }
 
-    credentials.push_back(credential);
-    return storage->save(credentials);
+    // Route through VaultProxy (enforcing authorization check)
+    try {
+        proxy->addCredential(std::move(credential));
+        syncLegacyCache();
+        return saveToDisk();
+    } catch (const UnauthorizedAccessException&) {
+        return false;
+    }
+}
+
+bool MasterVault::addCredential(const Credential& credential) {
+    // Wrap value-type Credential in shared_ptr and forward to polymorphic method
+    return addCredential(std::make_shared<Credential>(credential));
+}
+
+bool MasterVault::updateCredential(size_t index, std::shared_ptr<Credential> updated) {
+    if (!masterUnlocked || !credUnlocked || !updated) {
+        return false;
+    }
+
+    // Route through VaultProxy (enforcing authorization check)
+    try {
+        if (!proxy->updateCredential(index, std::move(updated))) {
+            return false;
+        }
+        syncLegacyCache();
+        return saveToDisk();
+    } catch (const UnauthorizedAccessException&) {
+        return false;
+    }
 }
 
 bool MasterVault::updateCredential(size_t index, const Credential& updated) {
-    if (!masterUnlocked || !credUnlocked || !storage || !cipher) {
-        return false;
-    }
-    if (index >= credentials.size()) {
-        return false;
-    }
-
-    Credential original = credentials[index];
-    credentials[index] = updated;
-    if (!storage->save(credentials)) {
-        credentials[index] = original;
-        return false;
-    }
-    return true;
-}
-
-bool MasterVault::verifyCredentialPassword(const std::string& credPassword) const {
-    if (credPassword.empty() || credPasswordHash.empty() || credSalt.empty()) {
-        return false;
-    }
-    // Master password must never be accepted to authorize credential operations
-    if (CryptoUtils::verifyPassword(credPassword, masterSalt, masterPasswordHash)) {
-        return false;
-    }
-    return CryptoUtils::verifyPassword(credPassword, credSalt, credPasswordHash);
+    return updateCredential(index, std::make_shared<Credential>(updated));
 }
 
 bool MasterVault::deleteCredential(size_t index) {
-    if (!masterUnlocked || !credUnlocked || !storage || !cipher) {
-        return false;
-    }
-    if (index >= credentials.size()) {
+    if (!masterUnlocked || !credUnlocked) {
         return false;
     }
 
-    Credential removed = credentials[index];
-    credentials.erase(credentials.begin() + index);
-    if (!storage->save(credentials)) {
-        credentials.insert(credentials.begin() + index, removed);
+    // Route through VaultProxy (enforcing authorization check)
+    try {
+        if (!proxy->deleteCredential(index)) {
+            return false;
+        }
+        syncLegacyCache();
+        return saveToDisk();
+    } catch (const UnauthorizedAccessException&) {
         return false;
     }
-    return true;
+}
+
+std::shared_ptr<Credential> MasterVault::getCredential(size_t index) const {
+    if (!masterUnlocked || !credUnlocked) {
+        return nullptr;
+    }
+    try {
+        auto all = proxy->getCredentials();
+        if (index >= all.size()) {
+            return nullptr;
+        }
+        return all[index];
+    } catch (const UnauthorizedAccessException&) {
+        return nullptr;
+    }
+}
+
+std::vector<std::shared_ptr<Credential>> MasterVault::getPolymorphicCredentials() const {
+    if (!masterUnlocked || !credUnlocked) {
+        return {};
+    }
+    try {
+        return proxy->getCredentials();
+    } catch (const UnauthorizedAccessException&) {
+        return {};
+    }
+}
+
+std::vector<std::shared_ptr<Credential>> MasterVault::search(const std::string& query) const {
+    if (!masterUnlocked || !credUnlocked) {
+        return {};
+    }
+    try {
+        return proxy->search(query);
+    } catch (const UnauthorizedAccessException&) {
+        return {};
+    }
 }
 
 const std::vector<Credential>& MasterVault::getCredentials() const {
-    static const std::vector<Credential> empty;
-    if (!masterUnlocked || !credUnlocked) {
-        return empty;
-    }
-    return credentials;
+    syncLegacyCache();
+    return cachedCredentials;
 }
 
 size_t MasterVault::getCredentialCount() const {
     if (!masterUnlocked || !credUnlocked) {
         return 0;
     }
-    return credentials.size();
+    try {
+        return proxy->getCredentials().size();
+    } catch (const UnauthorizedAccessException&) {
+        return 0;
+    }
+}
+
+bool MasterVault::verifyCredentialPassword(const std::string& credPassword) const {
+    if (credPassword.empty() || credPasswordHash.empty() || credSalt.empty()) {
+        return false;
+    }
+    // Security check: Master password must NEVER authorize credential vault operations
+    if (CryptoUtils::verifyPassword(credPassword, masterSalt, masterPasswordHash)) {
+        return false;
+    }
+    return CryptoUtils::verifyPassword(credPassword, credSalt, credPasswordHash);
+}
+
+VaultProxy& MasterVault::getProxy() {
+    return *proxy;
+}
+
+const VaultProxy& MasterVault::getProxy() const {
+    return *proxy;
+}
+
+bool MasterVault::save() {
+    return saveToDisk();
 }
 
 const std::string& MasterVault::getUsername() const {
     return username;
+}
+
+void MasterVault::syncLegacyCache() const {
+    cachedCredentials.clear();
+    if (!masterUnlocked || !credUnlocked || !proxy) {
+        return;
+    }
+    try {
+        auto items = proxy->getCredentials();
+        cachedCredentials.reserve(items.size());
+        for (const auto& item : items) {
+            if (item) {
+                cachedCredentials.push_back(*item);
+            }
+        }
+    } catch (const UnauthorizedAccessException&) {
+        cachedCredentials.clear();
+    }
+}
+
+bool MasterVault::saveToDisk() {
+    if (!storage || !cipher || !proxy) {
+        return false;
+    }
+    storage->setUsername(username);
+    storage->setMasterSalt(masterSalt);
+    storage->setMasterPasswordHash(masterPasswordHash);
+    storage->setCredSalt(credSalt);
+    storage->setCredPasswordHash(credPasswordHash);
+    storage->setCipher(cipher);
+
+    try {
+        auto items = proxy->getCredentials();
+        return storage->save(items);
+    } catch (const UnauthorizedAccessException&) {
+        return false;
+    }
 }

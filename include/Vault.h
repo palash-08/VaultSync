@@ -72,6 +72,17 @@ public:
      * @brief Unlocks the vault, enabling access to stored credentials.
      */
     void unlock();
+
+    /**
+     * @brief Clears all credentials stored in memory.
+     */
+    void clear();
+
+    /**
+     * @brief Returns the number of credentials in the vault.
+     * @return Number of credentials, or 0 if locked.
+     */
+    size_t size() const;
 };
 
 #endif // VAULT_H
