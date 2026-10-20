@@ -20,6 +20,8 @@ This document chronicles the prompt interactions, architectural directives, orch
 | **Prompt 11** | Phase 4: Main Menu & Interactive TUI Overhaul | Agy / `claude-opus-4-6` (`vaultsync-4`) | Delegated interactive overhaul of `src/main.cpp` to expose polymorphic credentials, search, password tools, and security score. | `src/main.cpp`, `TerminalUtils` |
 | **Prompt 12** | Debian APT Packaging & Custom Repository Feasibility | Codex (`vaultsync-6`) | Architectural feasibility analysis for packaging `.deb` via CPack/dpkg-deb and self-hosting an APT repo on `palash.pro` via Nginx. | Packaging spec, Nginx & GPG configs |
 | **Prompt 13** | Phase 1: Core Code & Test Suite Rectification | Orchestrator (Internal) | Eliminated assert side-effects, upgraded KDF to 600k PBKDF2 iterations, migrated storage to XDG State with 0700/0600 permissions, achieved 100% CTest pass. | `CryptoUtils`, `FileStorage`, `MasterVault`, `test_cipher` |
+| **Prompt 14** | Phase 2: CMake & CPack Configuration | Orchestrator (Internal) | Refactored target to lowercase `vaultsync`, added install rules for binary and docs, and configured CPack DEB generator with `CPACK_DEBIAN_PACKAGE_SHLIBDEPS`. | `CMakeLists.txt` |
+| **Prompt 15** | Phase 3: CI/CD Readiness Assessment | Orchestrator (Internal) | Evaluated repository baseline for GitHub Actions; validated local CPack/CTest prerequisites and established CI/CD decoupling strategy. | `CMakeLists.txt`, `.github/workflows/` |
 
 ---
 
@@ -392,6 +394,47 @@ The user instructed the implementation of Phase 1 remediation to prepare VaultSy
 - [src/MasterVault.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/src/MasterVault.cpp)
 - [src/FileStorage.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/src/FileStorage.cpp)
 - [tests/test_cipher.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/tests/test_cipher.cpp)
+
+---
+
+## Prompt 14: Phase 2 — CMake & CPack Configuration
+
+### Summary of User Prompt
+implement phase 2 with CMakeLists refactoring
+
+### Key Architecture / Design Objectives
+- **Target Standardization**: Renamed executable target to lowercase `vaultsync` and maintained `VaultSync` as an ALIAS target.
+- **FHS Installation Rules**: Added `install(TARGETS vaultsync RUNTIME DESTINATION bin)` and installed documentation (`README.md`, `architecture.md`) to `share/doc/vaultsync`.
+- **CPack DEB Metadata**: Configured CPack for Debian binary packaging with `CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON`, package vendor, maintainer, release `1`, and strict permissions.
+
+### Orchestrator Actions & Results
+1. **CMake Refactoring**: Updated `CMakeLists.txt` with target renaming, alias, install rules, and complete CPack configuration block.
+2. **Installation Verification**: Verified staging via `cmake --install` to a temporary prefix, confirming `bin/vaultsync` and `share/doc/vaultsync/` layout.
+3. **Build & Test Validation**: 100% CTest pass rate maintained across builds.
+
+### Artifacts and Files Involved
+- [CMakeLists.txt](file:///home/palash/.ao/data/worktrees/vaultsync/orchestrator/vaultsync-orchestrator/CMakeLists.txt)
+
+---
+
+## Prompt 15: Phase 3 CI/CD Readiness Assessment & Pre-Flight Verification
+
+### Summary of User Prompt
+The user inquired whether the repository is ready to begin constructing GitHub Actions CI/CD workflows using YAML configuration files after pushing the current local repository.
+
+### Key Architecture / Design Objectives
+- **Readiness Assessment**: Confirm whether the repository baseline (Phase 1 core rectification and Phase 2 CMake/CPack packaging) satisfies all prerequisites for automated CI/CD workflows.
+- **Local Tree Evaluation**: Verify that Phase 1 is committed and pushed (`cb0a23c`) and that Phase 2 changes (`CMakeLists.txt` with lowercase target, FHS install rules, and CPack DEB configuration) pass local verification before upstream synchronization.
+- **Workflow Decoupling**: Separate Continuous Integration (`ci.yml`, self-contained on Ubuntu runners with zero secrets) from Continuous Deployment (`release.yml`, requiring server-side GPG and reprepro configuration on `apt.palash.pro`).
+
+### Orchestrator Actions & Results
+1. **Verification**: Validated local CMake build, CTest suite (100% pass rate), and CPack Debian package generation targets.
+2. **Readiness Confirmation**: Confirmed that committing and pushing the verified Phase 2 configuration provides a clean, fully qualified baseline to proceed with `.github/workflows/ci.yml`.
+
+### Artifacts and Files Involved
+- [CMakeLists.txt](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/CMakeLists.txt)
+- `.github/workflows/ci.yml` (upcoming)
+- `.github/workflows/release.yml` (upcoming)
 
 ---
 
