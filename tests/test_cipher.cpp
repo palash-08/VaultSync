@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <iostream>
 #include <cassert>
 #include <string>
@@ -6,6 +9,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
+#include <sys/stat.h>
 
 #include "ICipher.h"
 #include "XORCipher.h"
@@ -57,7 +61,8 @@ void testArchitectureComponents() {
     }
 
     FileStorage fileStorage(testVaultPath);
-    assert(fileStorage.save(originalCredentials));
+    bool savedPoly = fileStorage.save(originalCredentials);
+    assert(savedPoly);
 
     auto restoredCredentials = fileStorage.loadPolymorphic();
     assert(restoredCredentials.size() == 3);
@@ -340,12 +345,15 @@ void testMasterVaultEditCredential() {
     std::string masterPass = "MasterSecret#99";
     std::string credPass = "CredSecret#88";
 
-    assert(vault.create(testUser, masterPass));
-    assert(vault.setupCredentialPassword(credPass));
+    bool created = vault.create(testUser, masterPass);
+    assert(created);
+    bool setup = vault.setupCredentialPassword(credPass);
+    assert(setup);
 
     // 1. Add initial credential
     Credential original("GitHub", "olduser", "oldpass123", "old notes");
-    assert(vault.addCredential(original));
+    bool added = vault.addCredential(original);
+    assert(added);
     assert(vault.getCredentialCount() == 1);
 
     // 2. Edit credential at index 0
@@ -361,15 +369,18 @@ void testMasterVaultEditCredential() {
     assert(creds[0].getNotes() == "new notes");
 
     // 4. Out-of-bounds update returns false
-    assert(!vault.updateCredential(5, updated) && "Out-of-bounds update should fail!");
+    bool oobUpdate = vault.updateCredential(5, updated);
+    assert(!oobUpdate && "Out-of-bounds update should fail!");
 
     // 5. Lock vault and reload from disk to verify persistence
     vault.lock();
 
     MasterVault reloadedVault;
     int attempts = 0;
-    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
-    assert(reloadedVault.unlockCredentials(credPass, attempts));
+    bool reloadedMaster = reloadedVault.unlockMaster(testUser, masterPass, attempts);
+    assert(reloadedMaster);
+    bool reloadedCred = reloadedVault.unlockCredentials(credPass, attempts);
+    assert(reloadedCred);
 
     assert(reloadedVault.getCredentialCount() == 1);
     const auto& reloadedCreds = reloadedVault.getCredentials();
@@ -403,14 +414,18 @@ void testMasterVaultDeleteCredential() {
     std::string masterPass = "MasterSecret#11";
     std::string credPass = "CredSecret#22";
 
-    assert(vault.create(testUser, masterPass));
-    assert(vault.setupCredentialPassword(credPass));
+    bool created = vault.create(testUser, masterPass);
+    assert(created);
+    bool setup = vault.setupCredentialPassword(credPass);
+    assert(setup);
 
     // 1. Add two credentials
     Credential cred1("GitHub", "octocat", "supertoken999", "notes1");
     Credential cred2("AWS", "clouduser", "cloudsecret888", "notes2");
-    assert(vault.addCredential(cred1));
-    assert(vault.addCredential(cred2));
+    bool added1 = vault.addCredential(cred1);
+    assert(added1);
+    bool added2 = vault.addCredential(cred2);
+    assert(added2);
     assert(vault.getCredentialCount() == 2);
 
     // 2. verifyCredentialPassword checks
@@ -425,15 +440,18 @@ void testMasterVaultDeleteCredential() {
     assert(vault.getCredentials()[0].getService() == "AWS");
 
     // 4. Out-of-bounds delete returns false
-    assert(!vault.deleteCredential(5) && "Out-of-bounds delete should fail!");
+    bool oobDelete = vault.deleteCredential(5);
+    assert(!oobDelete && "Out-of-bounds delete should fail!");
 
     // 5. Lock vault and reload from disk to verify persistence
     vault.lock();
 
     MasterVault reloadedVault;
     int attempts = 0;
-    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
-    assert(reloadedVault.unlockCredentials(credPass, attempts));
+    bool reloadedMaster = reloadedVault.unlockMaster(testUser, masterPass, attempts);
+    assert(reloadedMaster);
+    bool reloadedCred = reloadedVault.unlockCredentials(credPass, attempts);
+    assert(reloadedCred);
 
     assert(reloadedVault.getCredentialCount() == 1);
     assert(reloadedVault.getCredentials()[0].getService() == "AWS");
@@ -446,13 +464,16 @@ void testMasterVaultDeleteCredential() {
     assert(rawData.find("supertoken999") == std::string::npos && "Deleted password leaked in file!");
 
     // 7. Delete remaining credential to verify empty vault persistence
-    assert(reloadedVault.deleteCredential(0));
+    bool deletedRem = reloadedVault.deleteCredential(0);
+    assert(deletedRem);
     assert(reloadedVault.getCredentialCount() == 0);
 
     reloadedVault.lock();
     MasterVault emptyReloaded;
-    assert(emptyReloaded.unlockMaster(testUser, masterPass, attempts));
-    assert(emptyReloaded.unlockCredentials(credPass, attempts));
+    bool emptyMaster = emptyReloaded.unlockMaster(testUser, masterPass, attempts);
+    assert(emptyMaster);
+    bool emptyCred = emptyReloaded.unlockCredentials(credPass, attempts);
+    assert(emptyCred);
     assert(emptyReloaded.getCredentialCount() == 0);
 
     // Cleanup
@@ -474,9 +495,12 @@ void testMasterVaultLoginAttemptsAndLockout() {
     std::string masterPass = "MasterSecret#99";
     std::string credPass = "CredSecret#88";
 
-    assert(vault.create(testUser, masterPass));
-    assert(vault.setupCredentialPassword(credPass));
-    assert(vault.addCredential(Credential("TestService", "lockout_user", "sample_pass", "notes")));
+    bool created = vault.create(testUser, masterPass);
+    assert(created);
+    bool setup = vault.setupCredentialPassword(credPass);
+    assert(setup);
+    bool added = vault.addCredential(Credential("TestService", "lockout_user", "sample_pass", "notes"));
+    assert(added);
     vault.lock();
 
     // 1. Enter wrong Master Password once: 2 attempts remaining
@@ -520,17 +544,22 @@ void testMasterVaultLoginAttemptsAndLockout() {
 
     // 9. Verify partial failure followed by success resets counter
     vault.lock();
-    assert(!vault.unlockMaster(testUser, "WrongOnce", attempts));
+    bool wrongOnce = vault.unlockMaster(testUser, "WrongOnce", attempts);
+    assert(!wrongOnce);
     assert(attempts == 2);
-    assert(vault.unlockMaster(testUser, masterPass, attempts)); // Success resets counter
+    bool resetSuccess = vault.unlockMaster(testUser, masterPass, attempts); // Success resets counter
+    assert(resetSuccess);
     vault.lock();
-    assert(!vault.unlockMaster(testUser, "WrongAgain", attempts));
+    bool wrongAgain = vault.unlockMaster(testUser, "WrongAgain", attempts);
+    assert(!wrongAgain);
     assert(attempts == 2 && "Next session must start with full 3 attempts!");
 
     // 10. Verify no credential data was lost or modified
     vault.resetMasterLockout(testUser);
-    assert(vault.unlockMaster(testUser, masterPass, attempts));
-    assert(vault.unlockCredentials(credPass, attempts));
+    bool finalMaster = vault.unlockMaster(testUser, masterPass, attempts);
+    assert(finalMaster);
+    bool finalCred = vault.unlockCredentials(credPass, attempts);
+    assert(finalCred);
     assert(vault.getCredentialCount() == 1);
     assert(vault.getCredentials()[0].getService() == "TestService");
     assert(vault.getCredentials()[0].getPassword() == "sample_pass");
@@ -665,7 +694,8 @@ void testAESCipherAuthenticationAndTamperDetection() {
         std::make_shared<WiFiCredential>("OfficeNet", "wpa", "office_wpa3_key", "guest", "OfficeNet", "WPA3")
     };
 
-    assert(storage.save(credentials) && "FileStorage must successfully save credentials using AESCipher!");
+    bool storageSaved = storage.save(credentials);
+    assert(storageSaved && "FileStorage must successfully save credentials using AESCipher!");
 
     // Verify plaintext password is NOT in raw file
     std::ifstream rawFile(testVaultPath, std::ios::binary);
@@ -703,7 +733,8 @@ void testMasterVaultAESAndProxyIntegration() {
     std::string credPass = "CredPhase3Secret#2026";
 
     // 1. Create vault
-    assert(vault.create(testUser, masterPass));
+    bool created = vault.create(testUser, masterPass);
+    assert(created);
     assert(MasterVault::existsForUser(testUser));
 
     // 2. VaultProxy should reject access when vault is locked
@@ -716,7 +747,8 @@ void testMasterVaultAESAndProxyIntegration() {
     assert(unauthorizedCaught && "Accessing credentials via VaultProxy before unlock must throw UnauthorizedAccessException!");
 
     // 3. Setup credential password (switches to AESCipher)
-    assert(vault.setupCredentialPassword(credPass));
+    bool setup = vault.setupCredentialPassword(credPass);
+    assert(setup);
     assert(vault.isCredentialsUnlocked());
 
     // 4. Add polymorphic credentials
@@ -724,9 +756,12 @@ void testMasterVaultAESAndProxyIntegration() {
     auto wifiCred = std::make_shared<WiFiCredential>("HomeWiFi", "", "wpa3_super_pass", "living room", "HomeNet_5G", "WPA3");
     auto sshCred = std::make_shared<SSHCredential>("ProdServer", "ubuntu", "id_ed25519_pass", "bastion", "prod.example.com", 2222);
 
-    assert(vault.addCredential(webCred));
-    assert(vault.addCredential(wifiCred));
-    assert(vault.addCredential(sshCred));
+    bool addedWeb = vault.addCredential(webCred);
+    assert(addedWeb);
+    bool addedWifi = vault.addCredential(wifiCred);
+    assert(addedWifi);
+    bool addedSsh = vault.addCredential(sshCred);
+    assert(addedSsh);
     assert(vault.getCredentialCount() == 3);
 
     // 5. Search credentials across different polymorphic fields
@@ -756,6 +791,13 @@ void testMasterVaultAESAndProxyIntegration() {
     assert(rawBytes.find("id_ed25519_pass") == std::string::npos && "Plaintext ssh password must NOT appear in AES file!");
     assert(rawBytes.find("https://github.com") == std::string::npos && "Plaintext URL must NOT appear in AES file!");
 
+#if defined(__unix__) || defined(__APPLE__)
+    struct stat st{};
+    int statRes = ::stat(testVaultPath.c_str(), &st);
+    assert(statRes == 0 && "Vault file must exist for stat check!");
+    assert((st.st_mode & 0777) == 0600 && "Vault file must have strict 0600 POSIX permissions!");
+#endif
+
     // 8. Lock vault and verify in-memory cleanup
     vault.lock();
     assert(!vault.isMasterUnlocked());
@@ -773,8 +815,10 @@ void testMasterVaultAESAndProxyIntegration() {
     // 9. Reload vault from disk with new MasterVault instance
     MasterVault reloadedVault;
     int attempts = 0;
-    assert(reloadedVault.unlockMaster(testUser, masterPass, attempts));
-    assert(reloadedVault.unlockCredentials(credPass, attempts));
+    bool reloadedMaster = reloadedVault.unlockMaster(testUser, masterPass, attempts);
+    assert(reloadedMaster);
+    bool reloadedCred = reloadedVault.unlockCredentials(credPass, attempts);
+    assert(reloadedCred);
     assert(reloadedVault.isCredentialsUnlocked());
     assert(reloadedVault.getCredentialCount() == 3);
 

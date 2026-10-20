@@ -54,10 +54,11 @@ namespace CryptoUtils {
     bool verifyPassword(const std::string& password, const std::string& salt, const std::string& expectedHash);
 
     /**
-     * @brief Derives a deterministic cryptographic encryption key from the master password and salt.
+     * @brief Derives a deterministic 256-bit cryptographic encryption key from the master password
+     *        and salt using OpenSSL PKCS5_PBKDF2_HMAC with SHA-256 (600,000 iterations).
      * @param masterPassword Plaintext master password.
      * @param salt Vault salt string.
-     * @return Derived key string suitable for configuring an ICipher implementation.
+     * @return 64-character lowercase hexadecimal key string suitable for configuring an ICipher implementation.
      */
     std::string deriveKey(const std::string& masterPassword, const std::string& salt);
 

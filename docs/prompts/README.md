@@ -19,6 +19,7 @@ This document chronicles the prompt interactions, architectural directives, orch
 | **Prompt 10** | Phase 3: Wire MasterVault to VaultProxy, Repository, & AESCipher | Orchestrator (Internal) | Wired `MasterVault` to `VaultProxy` and `Repository<Credential>`, switched default cipher to production `AESCipher` (AES-256-GCM), implemented polymorphic credential persistence with backward compatibility, added Test 12. | `MasterVault.h`, `MasterVault.cpp`, `Vault.h`, `Vault.cpp`, `FileStorage.cpp`, `test_cipher.cpp` |
 | **Prompt 11** | Phase 4: Main Menu & Interactive TUI Overhaul | Agy / `claude-opus-4-6` (`vaultsync-4`) | Delegated interactive overhaul of `src/main.cpp` to expose polymorphic credentials, search, password tools, and security score. | `src/main.cpp`, `TerminalUtils` |
 | **Prompt 12** | Debian APT Packaging & Custom Repository Feasibility | Codex (`vaultsync-6`) | Architectural feasibility analysis for packaging `.deb` via CPack/dpkg-deb and self-hosting an APT repo on `palash.pro` via Nginx. | Packaging spec, Nginx & GPG configs |
+| **Prompt 13** | Phase 1: Core Code & Test Suite Rectification | Orchestrator (Internal) | Eliminated assert side-effects, upgraded KDF to 600k PBKDF2 iterations, migrated storage to XDG State with 0700/0600 permissions, achieved 100% CTest pass. | `CryptoUtils`, `FileStorage`, `MasterVault`, `test_cipher` |
 
 ---
 
@@ -370,15 +371,41 @@ The user requested an architectural guide and comprehensive feasibility analysis
 
 ---
 
+## Prompt 13: Phase 1 — Core Code & Test Suite Rectification
+
+### Summary of User Prompt
+The user instructed the implementation of Phase 1 remediation to prepare VaultSync for Debian packaging: eliminating `assert` side-effects in tests, upgrading key derivation to 600,000-iteration PBKDF2-HMAC-SHA256, and relocating vault storage to the XDG State Directory with strict POSIX permissions.
+
+### Key Architecture / Design Objectives
+- **Test Integrity**: Extracted stateful expressions from `assert(...)` into assigned variables in `tests/test_cipher.cpp` to prevent `NDEBUG` from disabling tests.
+- **Hardened KDF**: Implemented OpenSSL `PKCS5_PBKDF2_HMAC` (600,000 iterations) for AES-256 key derivation in `CryptoUtils.cpp`.
+- **XDG Storage & Path Sanitization**: Relocated default storage to `$XDG_STATE_HOME/vaultsync` (fallback `$HOME/.local/state/vaultsync`), sanitized/hashed usernames to eliminate path traversal, and enforced POSIX 0700 (directory) and 0600 (file) permissions.
+- **Atomic File Safety**: Removed legacy relative path fallback in `FileStorage::resolvePath()` and implemented atomic write via temporary file replacement.
+
+### Orchestrator Actions & Results
+1. **Core Rectification**: Applied changes across `include/CryptoUtils.h`, `src/CryptoUtils.cpp`, `src/MasterVault.cpp`, `src/FileStorage.cpp`, and `tests/test_cipher.cpp`.
+2. **Build & Test Validation**: Achieved 100% CTest pass rate across both Debug and Release build configurations.
+
+### Artifacts and Files Involved
+- [include/CryptoUtils.h](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/include/CryptoUtils.h)
+- [src/CryptoUtils.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/src/CryptoUtils.cpp)
+- [src/MasterVault.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/src/MasterVault.cpp)
+- [src/FileStorage.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/src/FileStorage.cpp)
+- [tests/test_cipher.cpp](file:///home/palash/.ao/data/worktrees/vaultsync/vaultsync-5/tests/test_cipher.cpp)
+
+---
+
 ## Summary of Completed Architecture Coverage
 
 ```text
 Target Architecture Components (23 Sections)
 ├── [x] Section 4: Polymorphic Credential Hierarchy (Web, WiFi, SSH)
 ├── [x] Section 5: Vault Implementation & Lifecycle
+├── [x] Section 6/8: Hardened PBKDF2-HMAC-SHA256 (600k iterations) & AES Key Derivation
 ├── [x] Section 7: Access Control Proxy (IVault & VaultProxy)
 ├── [x] Section 8: ICipher Abstraction & XOR/AES Implementations (AES-256-GCM delegated)
-├── [x] Section 10/11: File Storage Version 5 Tagged Binary Serialization
+├── [x] Section 10/11: File Storage Version 5 Tagged Binary Serialization & Atomic Temp Writes
+├── [x] Section 10: XDG State Directory Specification & POSIX File Security (0700/0600)
 ├── [x] Section 12: Generic Template Repository<T> with Predicate Search
 ├── [x] Section 13/14: Password Generator, Strength Evaluator & Security Analyzer
 ├── [x] Section 15: Dual-Auth & Brute-Force Login Lockout Protection

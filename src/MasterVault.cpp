@@ -6,6 +6,10 @@
 #include <chrono>
 #include <filesystem>
 #include <unordered_map>
+#include <cstdlib>
+#include <cctype>
+#include <algorithm>
+#include <sys/stat.h>
 
 namespace fs = std::filesystem;
 
@@ -49,7 +53,39 @@ MasterVault::~MasterVault() {
 }
 
 std::string MasterVault::getVaultPathForUser(const std::string& username) {
-    return "data/vault_" + username + ".bin";
+    fs::path baseDir;
+    const char* xdgState = std::getenv("XDG_STATE_HOME");
+    if (xdgState && *xdgState != '\0') {
+        baseDir = fs::path(xdgState) / "vaultsync";
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home && *home != '\0') {
+            baseDir = fs::path(home) / ".local" / "state" / "vaultsync";
+        } else {
+            baseDir = fs::path("data");
+        }
+    }
+
+    // Enforce POSIX 0700 permissions (rwx------) on the vault directory
+    std::error_code ec;
+    fs::create_directories(baseDir, ec);
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(baseDir.c_str(), S_IRUSR | S_IWUSR | S_IXUSR);
+#endif
+
+    // Sanitize username or SHA-256 hash if unsafe to prevent directory traversal
+    bool isSafe = !username.empty() && std::all_of(username.begin(), username.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-';
+    });
+
+    std::string filename;
+    if (isSafe) {
+        filename = "vault_" + username + ".bin";
+    } else {
+        filename = "vault_" + CryptoUtils::sha256(username) + ".bin";
+    }
+
+    return (baseDir / filename).string();
 }
 
 bool MasterVault::existsForUser(const std::string& username) {
@@ -58,14 +94,7 @@ bool MasterVault::existsForUser(const std::string& username) {
 }
 
 bool MasterVault::exists(const std::string& path) {
-    if (fs::exists(path)) {
-        return true;
-    }
-    // Also check parent directory in case binary runs from build/ directory
-    if (fs::exists("../" + path)) {
-        return true;
-    }
-    return false;
+    return fs::exists(path);
 }
 
 bool MasterVault::create(const std::string& user, const std::string& masterPassword) {

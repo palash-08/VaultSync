@@ -6,6 +6,7 @@
 #include <iostream>
 #include <filesystem>
 #include <cstdint>
+#include <sys/stat.h>
 
 namespace fs = std::filesystem;
 
@@ -16,15 +17,13 @@ FileStorage::FileStorage(const std::string& path, std::shared_ptr<ICipher> ciphe
 }
 
 std::string FileStorage::resolvePath(const std::string& path) {
-    if (fs::exists(path)) {
-        return path;
-    }
-    if (fs::exists("../" + path)) {
-        return "../" + path;
-    }
     fs::path p(path);
     if (p.has_parent_path()) {
-        fs::create_directories(p.parent_path());
+        std::error_code ec;
+        fs::create_directories(p.parent_path(), ec);
+#if defined(__unix__) || defined(__APPLE__)
+        ::chmod(p.parent_path().c_str(), S_IRUSR | S_IWUSR | S_IXUSR); // 0700
+#endif
     }
     return path;
 }
@@ -188,7 +187,8 @@ bool FileStorage::readHeader(std::string& outSalt, std::string& outHash, uint32_
 
 bool FileStorage::save(const std::vector<Credential>& credentials) const {
     std::string actualPath = resolvePath(filePath);
-    std::ofstream out(actualPath, std::ios::binary);
+    std::string tempPath = actualPath + ".tmp";
+    std::ofstream out(tempPath, std::ios::binary);
     if (!out.is_open()) {
         return false;
     }
@@ -227,12 +227,36 @@ bool FileStorage::save(const std::vector<Credential>& credentials) const {
         out.write(reinterpret_cast<const char*>(payload.data()), payload.size());
     }
 
-    return out.good();
+    out.flush();
+    out.close();
+    if (out.fail()) {
+        std::error_code ec;
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(tempPath.c_str(), S_IRUSR | S_IWUSR); // 0600
+#endif
+
+    std::error_code ec;
+    fs::rename(tempPath, actualPath, ec);
+    if (ec) {
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(actualPath.c_str(), S_IRUSR | S_IWUSR); // 0600
+#endif
+
+    return true;
 }
 
 bool FileStorage::save(const std::vector<std::shared_ptr<Credential>>& credentials) const {
     std::string actualPath = resolvePath(filePath);
-    std::ofstream out(actualPath, std::ios::binary);
+    std::string tempPath = actualPath + ".tmp";
+    std::ofstream out(tempPath, std::ios::binary);
     if (!out) {
         return false;
     }
@@ -262,7 +286,30 @@ bool FileStorage::save(const std::vector<std::shared_ptr<Credential>>& credentia
         out.write(reinterpret_cast<const char*>(payload.data()), payload.size());
     }
 
-    return out.good();
+    out.flush();
+    out.close();
+    if (out.fail()) {
+        std::error_code ec;
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(tempPath.c_str(), S_IRUSR | S_IWUSR); // 0600
+#endif
+
+    std::error_code ec;
+    fs::rename(tempPath, actualPath, ec);
+    if (ec) {
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(actualPath.c_str(), S_IRUSR | S_IWUSR); // 0600
+#endif
+
+    return true;
 }
 
 std::vector<std::shared_ptr<Credential>> FileStorage::loadPolymorphic() {

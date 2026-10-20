@@ -3,6 +3,9 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include <stdexcept>
+#include <openssl/evp.h>
+#include <openssl/crypto.h>
 
 namespace CryptoUtils {
 
@@ -171,8 +174,24 @@ bool verifyPassword(const std::string& password, const std::string& salt, const 
 }
 
 std::string deriveKey(const std::string& masterPassword, const std::string& salt) {
-    // Derives a cryptographic key for the ICipher encryption layer
-    return sha256("VAULTSYNC_KEY:" + salt + ":" + masterPassword);
+    // Derives a 256-bit cryptographic key using OpenSSL PKCS5_PBKDF2_HMAC with SHA-256 (600,000 iterations)
+    constexpr int ITERATIONS = 600000;
+    constexpr int KEY_LEN = 32; // 256 bits for AES-256
+    unsigned char outKey[KEY_LEN];
+
+    if (PKCS5_PBKDF2_HMAC(masterPassword.data(), static_cast<int>(masterPassword.size()),
+                          reinterpret_cast<const unsigned char*>(salt.data()), static_cast<int>(salt.size()),
+                          ITERATIONS, EVP_sha256(), KEY_LEN, outKey) != 1) {
+        throw std::runtime_error("Key derivation using PKCS5_PBKDF2_HMAC failed");
+    }
+
+    std::ostringstream oss;
+    for (int i = 0; i < KEY_LEN; ++i) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(outKey[i]);
+    }
+    // Cleanse stack buffer containing sensitive derived key bytes
+    OPENSSL_cleanse(outKey, sizeof(outKey));
+    return oss.str();
 }
 
 } // namespace CryptoUtils
