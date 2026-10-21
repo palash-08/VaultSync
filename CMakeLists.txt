@@ -10,28 +10,50 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenSSL REQUIRED)
 
+include(FetchContent)
+FetchContent_Declare(ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
+    GIT_TAG v5.0.0
+)
+FetchContent_MakeAvailable(ftxui)
+
 add_executable(vaultsync
     src/main.cpp
-    src/Credential.cpp
-    src/WebCredential.cpp
-    src/WiFiCredential.cpp
-    src/SSHCredential.cpp
-    src/CredentialFactory.cpp
-    src/Vault.cpp
-    src/VaultProxy.cpp
-    src/PasswordGenerator.cpp
-    src/PasswordStrength.cpp
-    src/PasswordAnalyzer.cpp
-    src/FileStorage.cpp
-    src/XORCipher.cpp
-    src/AESCipher.cpp
-    src/CryptoUtils.cpp
-    src/MasterVault.cpp
-    src/TerminalUtils.cpp
+    src/credentials/Credential.cpp
+    src/credentials/WebCredential.cpp
+    src/credentials/WiFiCredential.cpp
+    src/credentials/SSHCredential.cpp
+    src/credentials/CredentialFactory.cpp
+    src/storage/Vault.cpp
+    src/vault/VaultProxy.cpp
+    src/security/PasswordGenerator.cpp
+    src/security/PasswordStrength.cpp
+    src/security/PasswordAnalyzer.cpp
+    src/storage/FileStorage.cpp
+    src/crypto/XORCipher.cpp
+    src/crypto/AESCipher.cpp
+    src/crypto/CryptoUtils.cpp
+    src/auth/MasterVault.cpp
+    src/ui/TerminalUtils.cpp
 )
 
-target_include_directories(vaultsync PRIVATE include)
-target_link_libraries(vaultsync PRIVATE OpenSSL::Crypto)
+target_include_directories(vaultsync PRIVATE
+    include
+    include/crypto
+    include/auth
+    include/credentials
+    include/storage
+    include/security
+    include/vault
+    include/ui
+)
+
+target_link_libraries(vaultsync PRIVATE
+    OpenSSL::Crypto
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+)
 
 # Alias target to VaultSync for backward-compatible CMake target references
 add_executable(VaultSync ALIAS vaultsync)
@@ -39,25 +61,34 @@ add_executable(VaultSync ALIAS vaultsync)
 # Cipher and cryptographic test binary
 add_executable(test_cipher
     tests/test_cipher.cpp
-    src/Credential.cpp
-    src/WebCredential.cpp
-    src/WiFiCredential.cpp
-    src/SSHCredential.cpp
-    src/CredentialFactory.cpp
-    src/Vault.cpp
-    src/VaultProxy.cpp
-    src/PasswordGenerator.cpp
-    src/PasswordStrength.cpp
-    src/PasswordAnalyzer.cpp
-    src/FileStorage.cpp
-    src/XORCipher.cpp
-    src/AESCipher.cpp
-    src/CryptoUtils.cpp
-    src/MasterVault.cpp
-    src/TerminalUtils.cpp
+    src/credentials/Credential.cpp
+    src/credentials/WebCredential.cpp
+    src/credentials/WiFiCredential.cpp
+    src/credentials/SSHCredential.cpp
+    src/credentials/CredentialFactory.cpp
+    src/storage/Vault.cpp
+    src/vault/VaultProxy.cpp
+    src/security/PasswordGenerator.cpp
+    src/security/PasswordStrength.cpp
+    src/security/PasswordAnalyzer.cpp
+    src/storage/FileStorage.cpp
+    src/crypto/XORCipher.cpp
+    src/crypto/AESCipher.cpp
+    src/crypto/CryptoUtils.cpp
+    src/auth/MasterVault.cpp
+    src/ui/TerminalUtils.cpp
 )
 
-target_include_directories(test_cipher PRIVATE include)
+target_include_directories(test_cipher PRIVATE
+    include
+    include/crypto
+    include/auth
+    include/credentials
+    include/storage
+    include/security
+    include/vault
+    include/ui
+)
 target_link_libraries(test_cipher PRIVATE OpenSSL::Crypto)
 
 enable_testing()

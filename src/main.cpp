@@ -1,16 +1,26 @@
-#include "Credential.h"
-#include "WebCredential.h"
-#include "WiFiCredential.h"
-#include "SSHCredential.h"
-#include "CredentialFactory.h"
-#include "MasterVault.h"
-#include "PasswordGenerator.h"
-#include "PasswordStrength.h"
-#include "PasswordAnalyzer.h"
-#include "TerminalUtils.h"
-#include "VaultExceptions.h"
+#include "credentials/Credential.h"
+#include "credentials/WebCredential.h"
+#include "credentials/WiFiCredential.h"
+#include "credentials/SSHCredential.h"
+#include "credentials/CredentialFactory.h"
+#include "auth/MasterVault.h"
+#include "security/PasswordGenerator.h"
+#include "security/PasswordStrength.h"
+#include "security/PasswordAnalyzer.h"
+#include "ui/TerminalUtils.h"
+#include "security/VaultExceptions.h"
+#include "ui/Theme.h"
+
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/color.hpp>
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/component_options.hpp>
+#include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/component/event.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -20,34 +30,12 @@
 #include <unordered_map>
 #include <vector>
 
+using namespace ftxui;
+
 namespace {
 
 /**
- * @brief Returns a short 4-5 character badge representing the polymorphic credential type.
- * @param credential Shared pointer to the credential.
- * @return Badge string such as "[WEB]", "[WIFI]", "[SSH]", or "[GEN]".
- */
-std::string getCredentialTypeBadge(const std::shared_ptr<Credential>& credential) {
-    if (!credential) {
-        return "[???]";
-    }
-    const std::string credentialType = credential->getType();
-    if (credentialType == "web") {
-        return "[WEB] ";
-    }
-    if (credentialType == "wifi") {
-        return "[WIFI]";
-    }
-    if (credentialType == "ssh") {
-        return "[SSH] ";
-    }
-    return "[GEN] ";
-}
-
-/**
  * @brief Formats an epoch timestamp into a human-readable local date/time string.
- * @param timestampSeconds Epoch timestamp in seconds.
- * @return Formatted date string (YYYY-MM-DD HH:MM:SS) or "Not recorded".
  */
 std::string formatTimestamp(int64_t timestampSeconds) {
     if (timestampSeconds <= 0) {
@@ -58,1114 +46,1345 @@ std::string formatTimestamp(int64_t timestampSeconds) {
     if (!timeInfo) {
         return "Unknown";
     }
-    char buffer[64];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeInfo);
-    return std::string(buffer);
+    std::ostringstream oss;
+    oss << std::put_time(timeInfo, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
 }
 
 /**
- * @brief Prompts user for a password, offering manual entry or automatic generator.
- * @param promptLabel Contextual prompt label to display to the user.
- * @return The chosen or generated password string.
+ * @brief Returns a short badge string for console / list displays.
  */
-std::string promptPasswordWithGeneratorOption(const std::string& promptLabel) {
-    while (true) {
-        std::cout << "\nPassword options for " << promptLabel << ":\n";
-        std::cout << "  [1] Enter password manually\n";
-        std::cout << "  [2] Generate secure random password\n";
-        std::cout << "Choose option (1-2, default 1): ";
+std::string getTypeBadgeStr(const std::shared_ptr<Credential>& credential) {
+    if (!credential) return "[???]";
+    const std::string t = credential->getType();
+    if (t == "web") return "[WEB]";
+    if (t == "wifi") return "[WIFI]";
+    if (t == "ssh") return "[SSH]";
+    return "[GEN]";
+}
 
-        std::string choice;
-        if (!std::getline(std::cin, choice)) {
-            return {};
+std::string trimString(std::string s) {
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) {
+        s.pop_back();
+    }
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n')) {
+        start++;
+    }
+    return s.substr(start);
+}
+
+// Forward declarations
+bool ensureCredentialVaultUnlocked(MasterVault& vault);
+void runMasterVaultSession(MasterVault& vault);
+bool promptCreateCredential(MasterVault& vault);
+void handleEditCredential(MasterVault& vault, size_t index);
+bool handleDeleteCredential(MasterVault& vault, size_t index);
+
+// ============================================================================
+// Authentication Screens (Welcome, Login, Create)
+// ============================================================================
+
+/**
+ * @brief Renders the centered OpenCode Login Screen.
+ * @return True if login succeeded; false if cancelled.
+ */
+bool handleLoginMasterVault(MasterVault& vault) {
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+
+    std::string username;
+    std::string password;
+    std::string statusMessage;
+    Color statusColor = Theme::Danger;
+    bool loginSuccess = false;
+
+    Component inputUser;
+    Component inputPass;
+
+    auto loginAction = [&] {
+        username = trimString(username);
+        if (username.empty()) {
+            statusMessage = "Username cannot be empty.";
+            statusColor = Theme::Danger;
+            return;
         }
 
-        if (choice == "2" || choice == "G" || choice == "g") {
-            std::cout << "Enter desired password length (8-128, default 16): ";
-            std::string lengthInput;
-            size_t length = 16;
-            if (std::getline(std::cin, lengthInput) && !lengthInput.empty()) {
-                try {
-                    length = std::stoul(lengthInput);
-                    if (length < 8) length = 8;
-                    if (length > 128) length = 128;
-                } catch (...) {
-                    length = 16;
-                }
-            }
-
-            std::string generatedPassword = PasswordGenerator::generate(length);
-            PasswordStrengthResult strength = PasswordStrength::analyze(generatedPassword);
-            std::cout << "\nGenerated Password: " << generatedPassword << "\n";
-            std::cout << "Strength Score    : " << strength.score << "/100 ("
-                      << strength.entropy << " bits) - " << strength.feedback << "\n";
-            return generatedPassword;
+        if (!MasterVault::existsForUser(username)) {
+            statusMessage = "No vault found for user \"" + username + "\". Please create one first.";
+            statusColor = Theme::Danger;
+            return;
         }
 
-        // Manual entry (default)
-        if (!std::cin.good()) {
-            return {};
+        if (password.empty()) {
+            statusMessage = "Master password cannot be empty.";
+            statusColor = Theme::Danger;
+            return;
         }
-        std::string password = TerminalUtils::readHiddenPassword("Enter " + promptLabel + ": ");
-        if (!std::cin.good()) {
-            return {};
+
+        // Check for active lockout
+        int remainingSeconds = 0;
+        if (vault.isMasterLockedOut(username, remainingSeconds)) {
+            statusMessage = "Login is temporarily locked. Try again in " +
+                            std::to_string(remainingSeconds) + " seconds.";
+            statusColor = Theme::Danger;
+            return;
+        }
+
+        int remainingAttempts = 0;
+        if (vault.unlockMaster(username, password, remainingAttempts)) {
+            loginSuccess = true;
+            exit();
+            return;
+        }
+
+        if (vault.isMasterLockedOut(username, remainingSeconds)) {
+            statusMessage = "Maximum login attempts exceeded. Master Vault temporarily locked for " +
+                            std::to_string(remainingSeconds) + "s.";
+            statusColor = Theme::Danger;
+        } else {
+            statusMessage = "Invalid master password. Attempts remaining: " + std::to_string(remainingAttempts);
+            statusColor = Theme::Warning;
+        }
+        password.clear(); // Clear so the user starts fresh on the next try
+    };
+
+    inputUser = Input(&username, "Enter username", Theme::inputOption(false, [&] {
+        if (inputPass) {
+            inputPass->TakeFocus();
+        }
+    }));
+    inputPass = Input(&password, "Enter master password", Theme::inputOption(true, [&] {
+        loginAction();
+    }));
+
+    auto btnLogin = Button("Login", loginAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputUser,
+        inputPass,
+        Container::Horizontal({
+            btnLogin,
+            btnCancel,
+        }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        Elements statusElements;
+        if (!statusMessage.empty()) {
+            statusElements.push_back(text(statusMessage) | bold | color(statusColor));
+        }
+
+        auto cardContent = vbox({
+            text(" VaultSync — Master Vault Login ") | bold | color(Theme::Primary),
+            text(" Enter your credentials to access encrypted storage ") | dim | color(Theme::Muted),
+            separator() | color(Theme::Subtle),
+            hbox({ text(" Username : ") | bold | color(Theme::TextBright), inputUser->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+            hbox({ text(" Password : ") | bold | color(Theme::TextBright), inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+            vbox(std::move(statusElements)),
+            separator() | color(Theme::Subtle),
+            hbox({
+                btnLogin->Render(),
+                text("  "),
+                btnCancel->Render(),
+            }) | center,
+        }) | size(WIDTH, EQUAL, 56) | borderRounded | color(Theme::Primary);
+
+        return vbox({
+            filler(),
+            hbox({ filler(), cardContent, filler() }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+    return loginSuccess;
+}
+
+/**
+ * @brief Renders the centered Create Master Vault Screen.
+ */
+void handleCreateMasterVault(MasterVault& vault) {
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+
+    std::string username;
+    std::string password;
+    std::string confirmPassword;
+    std::string statusMessage;
+    Color statusColor = Theme::Danger;
+
+    Component inputUser;
+    Component inputPass;
+    Component inputConfirm;
+
+    auto createAction = [&] {
+        username = trimString(username);
+        if (username.empty()) {
+            statusMessage = "Username cannot be empty.";
+            statusColor = Theme::Danger;
+            return;
         }
         if (password.empty()) {
-            std::cout << "Error: Password cannot be empty. Please try again.\n";
-            continue;
-        }
-
-        std::string confirmPassword = TerminalUtils::readHiddenPassword("Confirm " + promptLabel + ": ");
-        if (!std::cin.good()) {
-            return {};
+            statusMessage = "Master password cannot be empty.";
+            statusColor = Theme::Danger;
+            return;
         }
         if (password != confirmPassword) {
-            std::cout << "Error: Passwords do not match. Please try again.\n";
-            continue;
+            statusMessage = "Passwords do not match.";
+            statusColor = Theme::Danger;
+            return;
+        }
+        if (vault.existsForUser(username)) {
+            statusMessage = "A vault already exists for user \"" + username + "\".";
+            statusColor = Theme::Danger;
+            return;
         }
 
-        return password;
-    }
+        if (vault.create(username, password)) {
+            statusMessage = "Vault created successfully! You can now log in.";
+            statusColor = Theme::Success;
+            exit();
+        } else {
+            statusMessage = "Failed to create vault. Please try again.";
+            statusColor = Theme::Danger;
+        }
+    };
+
+    inputUser = Input(&username, "Enter username", Theme::inputOption(false, [&] {
+        if (inputPass) inputPass->TakeFocus();
+    }));
+    inputPass = Input(&password, "Enter master password", Theme::inputOption(true, [&] {
+        if (inputConfirm) inputConfirm->TakeFocus();
+    }));
+    inputConfirm = Input(&confirmPassword, "Confirm master password", Theme::inputOption(true, [&] {
+        createAction();
+    }));
+
+    auto btnCreate = Button("Create Vault", createAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputUser,
+        inputPass,
+        inputConfirm,
+        Container::Horizontal({
+            btnCreate,
+            btnCancel,
+        }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        Elements statusElements;
+        if (!statusMessage.empty()) {
+            statusElements.push_back(text(statusMessage) | bold | color(statusColor));
+        }
+
+        auto cardContent = vbox({
+            text(" VaultSync — Create Master Vault ") | bold | color(Theme::Primary),
+            text(" Initialize a new encrypted local vault ") | dim | color(Theme::Muted),
+            separator() | color(Theme::Subtle),
+            hbox({ text(" Username : ") | bold | color(Theme::TextBright), inputUser->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+            hbox({ text(" Password : ") | bold | color(Theme::TextBright), inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+            hbox({ text(" Confirm  : ") | bold | color(Theme::TextBright), inputConfirm->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+            vbox(std::move(statusElements)),
+            separator() | color(Theme::Subtle),
+            hbox({
+                btnCreate->Render(),
+                text("  "),
+                btnCancel->Render(),
+            }) | center,
+        }) | size(WIDTH, EQUAL, 58) | borderRounded | color(Theme::Secondary);
+
+        return vbox({
+            filler(),
+            hbox({ filler(), cardContent, filler() }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
 }
 
 /**
  * @brief Ensures the Credential Vault tier is unlocked before performing data operations.
- * @param vault Reference to the active MasterVault.
- * @return True if unlocked and ready; false if cancelled or access denied.
  */
 bool ensureCredentialVaultUnlocked(MasterVault& vault) {
     if (vault.isCredentialsUnlocked()) {
         return true;
     }
 
-    // Delayed setup: configure credential vault password if not yet configured
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+    bool unlockSuccess = false;
+
+    // Delayed setup: first-time configuration
     if (!vault.hasCredentialPassword()) {
-        std::cout << "\nNo credential vault password has been configured.\n";
-        while (true) {
-            if (!std::cin.good()) {
-                return false;
-            }
-            std::string credentialPassword = TerminalUtils::readHiddenPassword("Create credential vault password: ");
-            if (!std::cin.good()) {
-                return false;
-            }
-            if (credentialPassword.empty()) {
-                std::cout << "Error: Password cannot be empty.\n";
-                continue;
-            }
+        std::string credPassword;
+        std::string confirmPassword;
+        std::string statusMessage;
 
-            std::string confirmPassword = TerminalUtils::readHiddenPassword("Confirm credential vault password: ");
-            if (!std::cin.good()) {
-                return false;
-            }
-            if (credentialPassword != confirmPassword) {
-                std::cout << "Error: Passwords do not match. Please try again.\n";
-                continue;
-            }
+        Component inputPass;
+        Component inputConfirm;
 
-            if (!vault.setupCredentialPassword(credentialPassword)) {
-                std::cout << "Credential vault password must be different from the master password.\n";
-                continue;
+        auto setupAction = [&] {
+            if (credPassword.empty()) {
+                statusMessage = "Password cannot be empty.";
+                return;
             }
+            if (credPassword != confirmPassword) {
+                statusMessage = "Passwords do not match.";
+                return;
+            }
+            if (!vault.setupCredentialPassword(credPassword)) {
+                statusMessage = "Credential password must differ from Master password.";
+                return;
+            }
+            unlockSuccess = true;
+            exit();
+        };
 
-            std::cout << "\nCredential vault password configured successfully.\n";
-            return true;
-        }
+        inputPass = Input(&credPassword, "Enter credential vault password", Theme::inputOption(true, [&] {
+            if (inputConfirm) inputConfirm->TakeFocus();
+        }));
+        inputConfirm = Input(&confirmPassword, "Confirm credential vault password", Theme::inputOption(true, [&] {
+            setupAction();
+        }));
+
+        auto btnSubmit = Button("Set Password", setupAction, Theme::buttonOption(true));
+        auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+        auto container = Container::Vertical({
+            inputPass,
+            inputConfirm,
+            Container::Horizontal({ btnSubmit, btnCancel }),
+        });
+
+        auto renderer = Renderer(container, [&] {
+            return vbox({
+                filler(),
+                hbox({
+                    filler(),
+                    vbox({
+                        text(" Setup Credential Vault Encryption ") | bold | color(Theme::Primary),
+                        text(" Enforces dual-authentication. Derives AES-256-GCM symmetric key. ") | dim | color(Theme::Muted),
+                        separator() | color(Theme::Subtle),
+                        hbox({ text(" Credential Password : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+                        hbox({ text(" Confirm Password    : ") | bold, inputConfirm->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+                        text(statusMessage) | color(Theme::Danger),
+                        separator() | color(Theme::Subtle),
+                        hbox({ btnSubmit->Render(), text("  "), btnCancel->Render() }) | center,
+                    }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Primary),
+                    filler(),
+                }),
+                filler(),
+            });
+        });
+
+        screen.Loop(renderer);
+        return unlockSuccess;
     }
 
-    // Authenticate existing credential vault password (3 attempts maximum)
-    vault.resetCredentialsAttempts();
-    while (true) {
-        if (!std::cin.good()) {
-            return false;
-        }
-        std::string credentialPassword = TerminalUtils::readHiddenPassword("Enter credential vault password: ");
-        if (!std::cin.good()) {
-            return false;
-        }
-        int attemptsRemaining = 0;
-        if (vault.unlockCredentials(credentialPassword, attemptsRemaining)) {
-            std::cout << "\nCredential vault unlocked.\n";
-            return true;
+    // Existing vault unlock
+    std::string credPassword;
+    std::string statusMessage;
+    int remaining = 3;
+
+    Component inputPass;
+
+    auto unlockAction = [&] {
+        if (credPassword.empty()) {
+            statusMessage = "Password cannot be empty.";
+            return;
         }
 
-        std::cout << "Invalid credential vault password.\n";
-        if (attemptsRemaining <= 0) {
-            std::cout << "\nMaximum attempts exceeded. Credential vault access denied.\n";
-            return false;
+        int remainingAttempts = 0;
+        if (vault.unlockCredentials(credPassword, remainingAttempts)) {
+            unlockSuccess = true;
+            exit();
+            return;
         }
-    }
+
+        if (remainingAttempts <= 0) {
+            statusMessage = "Maximum attempts exceeded. Credential vault access denied.";
+            exit();
+        } else {
+            statusMessage = "Invalid password. Attempts remaining: " + std::to_string(remainingAttempts);
+        }
+        credPassword.clear(); // Clear so the user starts fresh
+    };
+
+    inputPass = Input(&credPassword, "Enter credential vault password", Theme::inputOption(true, [&] {
+        unlockAction();
+    }));
+
+    auto btnUnlock = Button("Unlock", unlockAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputPass,
+        Container::Horizontal({ btnUnlock, btnCancel }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Unlock Credential Vault ") | bold | color(Theme::Primary),
+                    text(" Enter your credential vault password to decrypt payload ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({ text(" Password : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Subtle),
+                    text(statusMessage) | color(Theme::Danger),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnUnlock->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 56) | borderRounded | color(Theme::Primary),
+                filler(),
+            }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+    return unlockSuccess;
 }
 
+// ============================================================================
+// Modals: Add, Edit, Delete
+// ============================================================================
+
 /**
- * @brief Prompts the user to create one of four polymorphic credential types.
- * @return Shared pointer to newly created Credential instance, or nullptr if cancelled.
+ * @brief Modal dialog to add a new polymorphic credential.
  */
-std::shared_ptr<Credential> promptCreatePolymorphicCredential() {
-    std::cout << "\n================ Add New Credential ================\n";
-    std::cout << "Select Credential Type:\n";
-    std::cout << "  [1] Web Account (Website, Login, URL)\n";
-    std::cout << "  [2] Wi-Fi Network (SSID, Security Type, Passphrase)\n";
-    std::cout << "  [3] SSH Key / Server (Host, Port, User, Passphrase)\n";
-    std::cout << "  [4] Generic Credential (Service, User, Password, Notes)\n";
-    std::cout << "  [0] Cancel\n";
-    std::cout << "Enter choice (0-4): ";
+bool promptCreateCredential(MasterVault& vault) {
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+    bool created = false;
 
-    std::string typeChoice;
-    if (!std::getline(std::cin, typeChoice) || typeChoice == "0") {
-        std::cout << "Creation cancelled.\n";
-        return nullptr;
-    }
+    std::vector<std::string> typeEntries = {"Web Account", "Wi-Fi Network", "SSH Server", "Generic"};
+    int selectedType = 0;
 
-    if (typeChoice == "1") {
-        std::cout << "\n--- Web Account Details ---\n";
-        std::cout << "Enter service / site name (e.g. GitHub): ";
-        std::string service;
-        if (!std::getline(std::cin, service) || service.empty()) {
-            std::cout << "Error: Service name cannot be empty.\n";
-            return nullptr;
-        }
+    std::string service, username, password, notes;
+    std::string url;
+    std::string ssid, securityType = "WPA2";
+    std::string host, portStr = "22";
+    std::string errorMessage;
 
-        std::cout << "Enter username or email: ";
-        std::string username;
-        if (!std::getline(std::cin, username)) return nullptr;
+    auto radioType = Radiobox(&typeEntries, &selectedType);
+    Component inputService;
+    Component inputUser;
+    Component inputPass;
+    Component inputNotes;
+    Component inputUrl;
+    Component inputSsid;
+    Component inputSec;
+    Component inputHost;
+    Component inputPort;
 
-        std::string password = promptPasswordWithGeneratorOption("web account password");
-        if (password.empty()) return nullptr;
-
-        std::cout << "Enter website URL (e.g. https://github.com/login): ";
-        std::string url;
-        if (!std::getline(std::cin, url)) return nullptr;
-
-        std::cout << "Enter notes (optional): ";
-        std::string notes;
-        if (!std::getline(std::cin, notes)) return nullptr;
-
-        return std::make_shared<WebCredential>(service, username, password, notes, url);
-    }
-
-    if (typeChoice == "2") {
-        std::cout << "\n--- Wi-Fi Network Details ---\n";
-        std::cout << "Enter network SSID (e.g. HomeNet): ";
-        std::string ssid;
-        if (!std::getline(std::cin, ssid) || ssid.empty()) {
-            std::cout << "Error: SSID cannot be empty.\n";
-            return nullptr;
-        }
-
-        std::cout << "Enter service label (press Enter to use SSID): ";
-        std::string service;
-        if (!std::getline(std::cin, service)) return nullptr;
+    auto saveAction = [&] {
         if (service.empty()) {
-            service = ssid;
+            errorMessage = "Service name is required.";
+            return;
+        }
+        if (password.empty()) {
+            errorMessage = "Password is required.";
+            return;
         }
 
-        std::string password = promptPasswordWithGeneratorOption("Wi-Fi network passphrase");
-        if (password.empty()) return nullptr;
-
-        std::cout << "Select Security Protocol:\n";
-        std::cout << "  [1] WPA2 (default)\n";
-        std::cout << "  [2] WPA3\n";
-        std::cout << "  [3] WEP\n";
-        std::cout << "  [4] Open\n";
-        std::cout << "Enter choice (1-4, default 1): ";
-        std::string securityChoice;
-        std::string securityType = "WPA2";
-        if (std::getline(std::cin, securityChoice)) {
-            if (securityChoice == "2") securityType = "WPA3";
-            else if (securityChoice == "3") securityType = "WEP";
-            else if (securityChoice == "4") securityType = "Open";
+        std::shared_ptr<Credential> newCred = nullptr;
+        if (selectedType == 0) { // Web
+            newCred = std::make_shared<WebCredential>(service, username, password, notes, url);
+        } else if (selectedType == 1) { // WiFi
+            newCred = std::make_shared<WiFiCredential>(service, username, password, notes, ssid, securityType);
+        } else if (selectedType == 2) { // SSH
+            int p = 22;
+            try { p = std::stoi(portStr); } catch (...) { p = 22; }
+            newCred = std::make_shared<SSHCredential>(service, username, password, notes, host, p);
+        } else { // Generic
+            newCred = std::make_shared<Credential>(service, username, password, notes);
         }
 
-        std::cout << "Enter notes (optional): ";
-        std::string notes;
-        if (!std::getline(std::cin, notes)) return nullptr;
+        if (newCred && vault.addCredential(newCred)) {
+            created = true;
+            exit();
+        } else {
+            errorMessage = "Failed to save credential to vault.";
+        }
+    };
 
-        return std::make_shared<WiFiCredential>(service, "", password, notes, ssid, securityType);
-    }
+    inputService = Input(&service, "Service / Label", Theme::inputOption(false, [&] {
+        if (inputUser) inputUser->TakeFocus();
+    }));
+    inputUser = Input(&username, "Username / ID", Theme::inputOption(false, [&] {
+        if (inputPass) inputPass->TakeFocus();
+    }));
+    inputPass = Input(&password, "Password", Theme::inputOption(false, [&] {
+        if (inputNotes) inputNotes->TakeFocus();
+    }));
+    inputNotes = Input(&notes, "Notes (optional)", Theme::inputOption(false, [&] {
+        if (selectedType == 0 && inputUrl) {
+            inputUrl->TakeFocus();
+        } else if (selectedType == 1 && inputSsid) {
+            inputSsid->TakeFocus();
+        } else if (selectedType == 2 && inputHost) {
+            inputHost->TakeFocus();
+        } else {
+            saveAction();
+        }
+    }));
 
-    if (typeChoice == "3") {
-        std::cout << "\n--- SSH Server / Key Details ---\n";
-        std::cout << "Enter server label (e.g. Production VPS): ";
-        std::string service;
-        if (!std::getline(std::cin, service) || service.empty()) {
-            std::cout << "Error: Server label cannot be empty.\n";
-            return nullptr;
+    inputUrl = Input(&url, "https://example.com", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+    inputSsid = Input(&ssid, "Network SSID", Theme::inputOption(false, [&] {
+        if (inputSec) inputSec->TakeFocus();
+    }));
+    inputSec = Input(&securityType, "WPA2 / WPA3", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+    inputHost = Input(&host, "hostname or IP", Theme::inputOption(false, [&] {
+        if (inputPort) inputPort->TakeFocus();
+    }));
+    inputPort = Input(&portStr, "22", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+
+    auto btnSave = Button("Save to Vault", saveAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    // Dynamically activate only type-relevant inputs so hidden fields never steal keyboard focus
+    auto typeSpecificContainer = Container::Tab({
+        Container::Vertical({ inputUrl }),               // Type 0: Web
+        Container::Vertical({ inputSsid, inputSec }),    // Type 1: WiFi
+        Container::Vertical({ inputHost, inputPort }),   // Type 2: SSH
+        Container::Vertical({}),                         // Type 3: Generic
+    }, &selectedType);
+
+    auto container = Container::Vertical({
+        radioType,
+        inputService,
+        inputUser,
+        inputPass,
+        inputNotes,
+        typeSpecificContainer,
+        Container::Horizontal({ btnSave, btnCancel }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        Elements formFields;
+        formFields.push_back(hbox({ text(" Type     : ") | bold, radioType->Render() }));
+        formFields.push_back(hbox({ text(" Service  : ") | bold, inputService->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+        formFields.push_back(hbox({ text(" Username : ") | bold, inputUser->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+        formFields.push_back(hbox({ text(" Password : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+        formFields.push_back(hbox({ text(" Notes    : ") | bold, inputNotes->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+
+        if (selectedType == 0) {
+            formFields.push_back(hbox({ text(" URL      : ") | bold, inputUrl->Render() | flex_grow }) | borderRounded | color(Theme::Primary));
+        } else if (selectedType == 1) {
+            formFields.push_back(hbox({ text(" SSID     : ") | bold, inputSsid->Render() | flex_grow }) | borderRounded | color(Theme::Success));
+            formFields.push_back(hbox({ text(" Security : ") | bold, inputSec->Render() | flex_grow }) | borderRounded | color(Theme::Success));
+        } else if (selectedType == 2) {
+            formFields.push_back(hbox({ text(" Host     : ") | bold, inputHost->Render() | flex_grow }) | borderRounded | color(Theme::Secondary));
+            formFields.push_back(hbox({ text(" Port     : ") | bold, inputPort->Render() | flex_grow }) | borderRounded | color(Theme::Secondary));
         }
 
-        std::cout << "Enter username (e.g. root): ";
-        std::string username;
-        if (!std::getline(std::cin, username)) return nullptr;
-
-        std::string password = promptPasswordWithGeneratorOption("SSH password / passphrase");
-        if (password.empty()) return nullptr;
-
-        std::cout << "Enter remote host or IP (e.g. server.example.com): ";
-        std::string host;
-        if (!std::getline(std::cin, host) || host.empty()) {
-            std::cout << "Error: Host cannot be empty.\n";
-            return nullptr;
+        if (!errorMessage.empty()) {
+            formFields.push_back(text(errorMessage) | bold | color(Theme::Danger));
         }
 
-        std::cout << "Enter remote port (default 22): ";
-        std::string portInput;
-        uint16_t port = 22;
-        if (std::getline(std::cin, portInput) && !portInput.empty()) {
-            try {
-                unsigned long p = std::stoul(portInput);
-                if (p > 0 && p <= 65535) {
-                    port = static_cast<uint16_t>(p);
-                }
-            } catch (...) {
-                port = 22;
-            }
-        }
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Add New Credential ") | bold | color(Theme::Primary),
+                    separator() | color(Theme::Subtle),
+                    vbox(std::move(formFields)),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnSave->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Primary),
+                filler(),
+            }),
+            filler(),
+        });
+    });
 
-        std::cout << "Enter notes (optional): ";
-        std::string notes;
-        if (!std::getline(std::cin, notes)) return nullptr;
-
-        return std::make_shared<SSHCredential>(service, username, password, notes, host, port);
-    }
-
-    if (typeChoice == "4") {
-        std::cout << "\n--- Generic Credential Details ---\n";
-        std::cout << "Enter service name: ";
-        std::string service;
-        if (!std::getline(std::cin, service) || service.empty()) {
-            std::cout << "Error: Service name cannot be empty.\n";
-            return nullptr;
-        }
-
-        std::cout << "Enter username: ";
-        std::string username;
-        if (!std::getline(std::cin, username)) return nullptr;
-
-        std::string password = promptPasswordWithGeneratorOption("password");
-        if (password.empty()) return nullptr;
-
-        std::cout << "Enter notes (optional): ";
-        std::string notes;
-        if (!std::getline(std::cin, notes)) return nullptr;
-
-        return std::make_shared<Credential>(service, username, password, notes);
-    }
-
-    std::cout << "Invalid choice. Credential creation cancelled.\n";
-    return nullptr;
+    screen.Loop(renderer);
+    return created;
 }
 
 /**
- * @brief Prompts for Credential Vault password and performs secure deletion of an item.
- * @param vault Reference to the active MasterVault.
- * @param index Zero-based index of the item to delete.
- * @return True if deleted successfully; false otherwise.
+ * @brief Modal dialog to edit an existing credential.
+ */
+void handleEditCredential(MasterVault& vault, size_t index) {
+    auto current = vault.getCredential(index);
+    if (!current) return;
+
+    // Clone credential to work on a temporary editable copy
+    std::shared_ptr<Credential> working(current->clone());
+
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+
+    std::string service = working->getService();
+    std::string username = working->getUsername();
+    std::string password = working->getPassword();
+    std::string notes = working->getNotes();
+
+    std::string url;
+    std::string ssid, secType;
+    std::string host, portStr;
+
+    if (auto web = std::dynamic_pointer_cast<WebCredential>(working)) {
+        url = web->getUrl();
+    } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(working)) {
+        ssid = wifi->getSsid();
+        secType = wifi->getSecurityType();
+    } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(working)) {
+        host = ssh->getHost();
+        portStr = std::to_string(ssh->getPort());
+    }
+
+    Component inputService;
+    Component inputUser;
+    Component inputPass;
+    Component inputNotes;
+    Component inputUrl;
+    Component inputSsid;
+    Component inputSec;
+    Component inputHost;
+    Component inputPort;
+
+    std::string errorMsg;
+
+    auto saveAction = [&] {
+        if (service.empty() || password.empty()) {
+            errorMsg = "Service and password cannot be empty.";
+            return;
+        }
+
+        working->setService(service);
+        working->setUsername(username);
+        working->setPassword(password);
+        working->setNotes(notes);
+
+        if (auto web = std::dynamic_pointer_cast<WebCredential>(working)) {
+            web->setUrl(url);
+        } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(working)) {
+            wifi->setSsid(ssid);
+            wifi->setSecurityType(secType);
+        } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(working)) {
+            ssh->setHost(host);
+            try { ssh->setPort(std::stoi(portStr)); } catch (...) {}
+        }
+
+        if (vault.updateCredential(index, working)) {
+            exit();
+        } else {
+            errorMsg = "Failed to update credential.";
+        }
+    };
+
+    inputService = Input(&service, "Service", Theme::inputOption(false, [&] {
+        if (inputUser) inputUser->TakeFocus();
+    }));
+    inputUser = Input(&username, "Username", Theme::inputOption(false, [&] {
+        if (inputPass) inputPass->TakeFocus();
+    }));
+    inputPass = Input(&password, "Password", Theme::inputOption(false, [&] {
+        if (inputNotes) inputNotes->TakeFocus();
+    }));
+    inputNotes = Input(&notes, "Notes", Theme::inputOption(false, [&] {
+        if (working->getType() == "web" && inputUrl) {
+            inputUrl->TakeFocus();
+        } else if (working->getType() == "wifi" && inputSsid) {
+            inputSsid->TakeFocus();
+        } else if (working->getType() == "ssh" && inputHost) {
+            inputHost->TakeFocus();
+        } else {
+            saveAction();
+        }
+    }));
+
+    inputUrl = Input(&url, "URL", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+    inputSsid = Input(&ssid, "SSID", Theme::inputOption(false, [&] {
+        if (inputSec) inputSec->TakeFocus();
+    }));
+    inputSec = Input(&secType, "Security", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+    inputHost = Input(&host, "Host", Theme::inputOption(false, [&] {
+        if (inputPort) inputPort->TakeFocus();
+    }));
+    inputPort = Input(&portStr, "Port", Theme::inputOption(false, [&] {
+        saveAction();
+    }));
+
+    auto btnSave = Button("Save Changes", saveAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    Components formComponents = {
+        inputService,
+        inputUser,
+        inputPass,
+        inputNotes,
+    };
+
+    if (working->getType() == "web") {
+        formComponents.push_back(inputUrl);
+    } else if (working->getType() == "wifi") {
+        formComponents.push_back(inputSsid);
+        formComponents.push_back(inputSec);
+    } else if (working->getType() == "ssh") {
+        formComponents.push_back(inputHost);
+        formComponents.push_back(inputPort);
+    }
+
+    formComponents.push_back(Container::Horizontal({ btnSave, btnCancel }));
+
+    auto container = Container::Vertical(std::move(formComponents));
+
+    auto renderer = Renderer(container, [&] {
+        Elements form;
+        form.push_back(hbox({ text(" Service  : ") | bold, inputService->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+        form.push_back(hbox({ text(" Username : ") | bold, inputUser->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+        form.push_back(hbox({ text(" Password : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Primary));
+        form.push_back(hbox({ text(" Notes    : ") | bold, inputNotes->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
+
+        if (working->getType() == "web") {
+            form.push_back(hbox({ text(" URL      : ") | bold, inputUrl->Render() | flex_grow }) | borderRounded | color(Theme::Primary));
+        } else if (working->getType() == "wifi") {
+            form.push_back(hbox({ text(" SSID     : ") | bold, inputSsid->Render() | flex_grow }) | borderRounded | color(Theme::Success));
+            form.push_back(hbox({ text(" Security : ") | bold, inputSec->Render() | flex_grow }) | borderRounded | color(Theme::Success));
+        } else if (working->getType() == "ssh") {
+            form.push_back(hbox({ text(" Host     : ") | bold, inputHost->Render() | flex_grow }) | borderRounded | color(Theme::Secondary));
+            form.push_back(hbox({ text(" Port     : ") | bold, inputPort->Render() | flex_grow }) | borderRounded | color(Theme::Secondary));
+        }
+
+        if (!errorMsg.empty()) {
+            form.push_back(text(errorMsg) | bold | color(Theme::Danger));
+        }
+
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Edit Credential — " + current->getService()) | bold | color(Theme::Primary),
+                    text(" Password is intentionally visible during editing. ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    vbox(std::move(form)),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnSave->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Primary),
+                filler(),
+            }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+}
+
+/**
+ * @brief Modal dialog to securely delete a credential with Credential Vault re-authentication.
  */
 bool handleDeleteCredential(MasterVault& vault, size_t index) {
-    auto credential = vault.getCredential(index);
-    if (!credential) {
-        return false;
-    }
+    auto current = vault.getCredential(index);
+    if (!current) return false;
 
-    std::cout << "\nDelete " << getCredentialTypeBadge(credential) << " credential \""
-              << credential->getService() << "\"?\n";
-    std::cout << "  [1] Confirm Delete\n";
-    std::cout << "  [2] Cancel\n";
-    std::cout << "Enter choice: ";
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
 
-    std::string choice;
-    if (!std::getline(std::cin, choice) || choice != "1") {
-        std::cout << "\nDeletion cancelled.\n";
-        return false;
-    }
-
+    std::string authPassword;
+    std::string errorMsg;
+    bool deleted = false;
     int attempts = 3;
-    while (attempts > 0) {
-        if (!std::cin.good()) {
-            return false;
+
+    Component inputAuth;
+
+    auto confirmAction = [&] {
+        if (authPassword.empty()) {
+            errorMsg = "Password cannot be empty.";
+            return;
         }
-        std::string password = TerminalUtils::readHiddenPassword("Enter credential vault password to confirm deletion: ");
-        if (!std::cin.good()) {
-            return false;
-        }
-        if (vault.verifyCredentialPassword(password)) {
+
+        if (vault.verifyCredentialPassword(authPassword)) {
             if (vault.deleteCredential(index)) {
-                std::cout << "\nCredential deleted successfully.\n";
-                return true;
+                deleted = true;
+                exit();
+                return;
             } else {
-                std::cout << "\nError: Failed to delete credential from storage.\n";
-                return false;
+                errorMsg = "Failed to delete credential from storage.";
+                return;
             }
         }
 
         attempts--;
         if (attempts > 0) {
-            std::cout << "Invalid credential vault password. Attempts remaining: " << attempts << "\n";
+            errorMsg = "Invalid credential vault password. Attempts remaining: " + std::to_string(attempts);
         } else {
-            std::cout << "\nMaximum attempts exceeded. Credential deletion denied.\n";
-            return false;
+            errorMsg = "Maximum attempts exceeded. Deletion denied.";
+            exit();
         }
-    }
+        authPassword.clear(); // Clear so the user starts fresh
+    };
 
-    return false;
+    inputAuth = Input(&authPassword, "Credential vault password", Theme::inputOption(true, [&] {
+        confirmAction();
+    }));
+
+    auto btnConfirm = Button("Confirm Delete", confirmAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputAuth,
+        Container::Horizontal({ btnConfirm, btnCancel }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Delete Credential ") | bold | color(Theme::Danger),
+                    text(" Permanently delete \"" + current->getService() + "\" (" + current->getType() + ")? ") | color(Theme::TextBright),
+                    text(" Re-authentication with Credential Vault password is required. ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({ text(" Vault Password : ") | bold, inputAuth->Render() | flex_grow }) | borderRounded | color(Theme::Danger),
+                    text(errorMsg) | color(Theme::Danger),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnConfirm->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 58) | borderRounded | color(Theme::Danger),
+                filler(),
+            }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+    return deleted;
 }
 
+// ============================================================================
+// Main Split-Pane Dashboard
+// ============================================================================
+
 /**
- * @brief Provides a type-aware interactive editor modifying common and type-specific fields.
- * @param vault Reference to the active MasterVault.
- * @param index Zero-based index of the credential to edit.
+ * @brief Coordinates the main interactive Master Session menu using an OpenCode split-pane layout.
  */
-void handleEditCredential(MasterVault& vault, size_t index) {
-    auto currentCredential = vault.getCredential(index);
-    if (!currentCredential) {
-        std::cout << "\nError: Credential not found.\n";
+void runMasterVaultSession(MasterVault& vault) {
+    if (!ensureCredentialVaultUnlocked(vault)) {
+        vault.lock();
         return;
     }
 
-    // Work on a deep clone so modifications only persist on Save
-    std::shared_ptr<Credential> workingCredential(currentCredential->clone());
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
 
-    while (true) {
-        std::cout << "\n================ Edit Credential ================\n";
-        std::cout << "Type       : " << workingCredential->getType() << " " << getCredentialTypeBadge(workingCredential) << "\n";
-        std::cout << "Service    : " << workingCredential->getService() << "\n";
-        std::cout << "Username   : " << workingCredential->getUsername() << "\n";
-        std::cout << "Password   : " << workingCredential->getPassword() << "\n";
-        std::cout << "Notes      : " << (workingCredential->getNotes().empty() ? "(none)" : workingCredential->getNotes()) << "\n";
+    std::vector<std::string> tabEntries = {
+        " Credentials ",
+        " Search ",
+        " Password Tools ",
+        " Security Audit ",
+        " Lock & Logout "
+    };
+    int selectedTab = 0;
+    auto tabMenu = Menu(&tabEntries, &selectedTab, MenuOption::Horizontal());
 
-        if (auto web = std::dynamic_pointer_cast<WebCredential>(workingCredential)) {
-            std::cout << "URL        : " << web->getUrl() << "\n";
-        } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(workingCredential)) {
-            std::cout << "SSID       : " << wifi->getSsid() << "\n";
-            std::cout << "Security   : " << wifi->getSecurityType() << "\n";
-        } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(workingCredential)) {
-            std::cout << "Host       : " << ssh->getHost() << "\n";
-            std::cout << "Port       : " << ssh->getPort() << "\n";
-        }
-
-        std::cout << "\nEdit Options:\n";
-        std::cout << "  [1] Change Service / Label\n";
-        std::cout << "  [2] Change Username\n";
-        std::cout << "  [3] Change Password\n";
-        std::cout << "  [4] Change Notes\n";
-
-        if (workingCredential->getType() == "web") {
-            std::cout << "  [5] Change Website URL\n";
-        } else if (workingCredential->getType() == "wifi") {
-            std::cout << "  [5] Change Network SSID\n";
-            std::cout << "  [6] Change Security Protocol\n";
-        } else if (workingCredential->getType() == "ssh") {
-            std::cout << "  [5] Change Remote Host\n";
-            std::cout << "  [6] Change Remote Port\n";
-        }
-
-        std::cout << "  [S] Save Changes\n";
-        std::cout << "  [C] Cancel\n";
-        std::cout << "Enter choice: ";
-
-        std::string choice;
-        if (!std::getline(std::cin, choice)) {
-            std::cout << "\nChanges cancelled.\n";
-            break;
-        }
-
-        if (choice == "1") {
-            std::cout << "Enter new service / label: ";
-            std::string newService;
-            if (std::getline(std::cin, newService) && !newService.empty()) {
-                workingCredential->setService(newService);
-            }
-        } else if (choice == "2") {
-            std::cout << "Enter new username: ";
-            std::string newUsername;
-            if (std::getline(std::cin, newUsername)) {
-                workingCredential->setUsername(newUsername);
-            }
-        } else if (choice == "3") {
-            std::string newPassword = promptPasswordWithGeneratorOption("new password");
-            if (!newPassword.empty()) {
-                workingCredential->setPassword(newPassword);
-            }
-        } else if (choice == "4") {
-            std::cout << "Enter new notes: ";
-            std::string newNotes;
-            if (std::getline(std::cin, newNotes)) {
-                workingCredential->setNotes(newNotes);
-            }
-        } else if (choice == "5" && workingCredential->getType() == "web") {
-            auto web = std::dynamic_pointer_cast<WebCredential>(workingCredential);
-            std::cout << "Enter new URL: ";
-            std::string newUrl;
-            if (std::getline(std::cin, newUrl)) {
-                web->setUrl(newUrl);
-            }
-        } else if (choice == "5" && workingCredential->getType() == "wifi") {
-            auto wifi = std::dynamic_pointer_cast<WiFiCredential>(workingCredential);
-            std::cout << "Enter new SSID: ";
-            std::string newSsid;
-            if (std::getline(std::cin, newSsid) && !newSsid.empty()) {
-                wifi->setSsid(newSsid);
-            }
-        } else if (choice == "6" && workingCredential->getType() == "wifi") {
-            auto wifi = std::dynamic_pointer_cast<WiFiCredential>(workingCredential);
-            std::cout << "Enter new Security Protocol (WPA2, WPA3, WEP, Open): ";
-            std::string newSec;
-            if (std::getline(std::cin, newSec) && !newSec.empty()) {
-                wifi->setSecurityType(newSec);
-            }
-        } else if (choice == "5" && workingCredential->getType() == "ssh") {
-            auto ssh = std::dynamic_pointer_cast<SSHCredential>(workingCredential);
-            std::cout << "Enter new Remote Host: ";
-            std::string newHost;
-            if (std::getline(std::cin, newHost) && !newHost.empty()) {
-                ssh->setHost(newHost);
-            }
-        } else if (choice == "6" && workingCredential->getType() == "ssh") {
-            auto ssh = std::dynamic_pointer_cast<SSHCredential>(workingCredential);
-            std::cout << "Enter new Remote Port (default 22): ";
-            std::string portInput;
-            if (std::getline(std::cin, portInput) && !portInput.empty()) {
-                try {
-                    ssh->setPort(static_cast<uint16_t>(std::stoul(portInput)));
-                } catch (...) {
-                    std::cout << "Invalid port.\n";
-                }
-            }
-        } else if (choice == "S" || choice == "s") {
-            if (vault.updateCredential(index, workingCredential)) {
-                std::cout << "\nCredential updated successfully.\n";
-            } else {
-                std::cout << "\nError: Failed to save updated credential.\n";
-            }
-            break;
-        } else if (choice == "C" || choice == "c") {
-            std::cout << "\nChanges cancelled.\n";
-            break;
-        } else {
-            std::cout << "\nInvalid choice. Please try again.\n";
-        }
-    }
-}
-
-/**
- * @brief Displays detailed attributes of a credential with a password mask toggle.
- * @param vault Reference to the active MasterVault.
- * @param index Zero-based index of the credential to display.
- */
-void viewCredentialDetails(MasterVault& vault, size_t index) {
+    // --- Tab 0: Credentials Split View State ---
+    int selectedCredIndex = 0;
+    int previousCredIndex = -1; // Track selection changes to auto-hide password
     bool showPassword = false;
+    std::vector<std::string> credentialLabels;
 
-    while (true) {
-        auto credential = vault.getCredential(index);
-        if (!credential) {
-            break;
+    auto refreshCredentialLabels = [&] {
+        credentialLabels.clear();
+        auto creds = vault.getPolymorphicCredentials();
+        for (size_t i = 0; i < creds.size(); ++i) {
+            std::string badge = getTypeBadgeStr(creds[i]);
+            credentialLabels.push_back("[" + std::to_string(i + 1) + "] " + badge + " " + creds[i]->getService());
         }
-
-        std::cout << "\n================ Credential Details ================\n";
-        std::cout << "Type       : " << credential->getType() << " " << getCredentialTypeBadge(credential) << "\n";
-        std::cout << "Service    : " << credential->getService() << "\n";
-        std::cout << "Username   : " << credential->getUsername() << "\n";
-        if (showPassword) {
-            std::cout << "Password   : " << credential->getPassword() << "\n";
-        } else {
-            std::cout << "Password   : ********\n";
+        if (credentialLabels.empty()) {
+            credentialLabels.push_back("(Vault is empty)");
+            selectedCredIndex = 0;
+        } else if (selectedCredIndex >= static_cast<int>(credentialLabels.size())) {
+            selectedCredIndex = static_cast<int>(credentialLabels.size()) - 1;
         }
-        std::cout << "Notes      : " << (credential->getNotes().empty() ? "(none)" : credential->getNotes()) << "\n";
-        std::cout << "Created At : " << formatTimestamp(credential->getCreatedAt()) << "\n";
+    };
 
-        // Display type-specific properties
-        if (auto web = std::dynamic_pointer_cast<WebCredential>(credential)) {
-            std::cout << "URL        : " << web->getUrl() << "\n";
-        } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(credential)) {
-            std::cout << "SSID       : " << wifi->getSsid() << "\n";
-            std::cout << "Security   : " << wifi->getSecurityType() << "\n";
-        } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(credential)) {
-            std::cout << "Host       : " << ssh->getHost() << "\n";
-            std::cout << "Port       : " << ssh->getPort() << "\n";
-        }
-        std::cout << "----------------------------------------------------\n";
+    refreshCredentialLabels();
 
-        std::cout << "  [1] " << (showPassword ? "Hide Password" : "Show Password") << "\n";
-        std::cout << "  [2] Edit Credential\n";
-        std::cout << "  [3] Delete Credential\n";
-        std::cout << "  [4] Back\n";
-        std::cout << "Enter choice (1-4): ";
+    auto credMenu = Menu(&credentialLabels, &selectedCredIndex, Theme::menuOption());
 
-        std::string choice;
-        if (!std::getline(std::cin, choice)) {
-            break;
-        }
-
-        if (choice == "1") {
-            showPassword = !showPassword;
-        } else if (choice == "2") {
-            handleEditCredential(vault, index);
-            showPassword = false;
-        } else if (choice == "3") {
-            if (handleDeleteCredential(vault, index)) {
-                break;
+    auto btnAddCred = Button("+ Add Credential", [&] {
+        if (promptCreateCredential(vault)) {
+            refreshCredentialLabels();
+            auto creds = vault.getPolymorphicCredentials();
+            if (!creds.empty()) {
+                selectedCredIndex = static_cast<int>(creds.size()) - 1;
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
             }
-        } else if (choice == "4") {
-            break;
-        } else {
-            std::cout << "Invalid choice. Please enter 1, 2, 3, or 4.\n";
         }
-    }
-}
+    }, Theme::buttonOption(true));
 
-/**
- * @brief Displays all stored credentials and allows selecting an item or adding new entries.
- * @param vault Reference to the active MasterVault.
- */
-void handleManageCredentials(MasterVault& vault) {
-    if (!ensureCredentialVaultUnlocked(vault)) {
-        return;
-    }
+    auto btnToggleShow = Button("Show/Hide Password", [&] {
+        showPassword = !showPassword;
+    }, Theme::buttonOption(false));
 
-    while (true) {
-        auto credentials = vault.getPolymorphicCredentials();
+    auto btnEdit = Button("Edit Credential", [&] {
+        auto creds = vault.getPolymorphicCredentials();
+        if (!creds.empty() && selectedCredIndex >= 0 && selectedCredIndex < static_cast<int>(creds.size())) {
+            handleEditCredential(vault, selectedCredIndex);
+            refreshCredentialLabels();
+        }
+    }, Theme::buttonOption(false));
 
-        std::cout << "\n================ Manage Credentials ================\n";
-        if (credentials.empty()) {
-            std::cout << "No credentials currently stored in vault.\n\n";
-        } else {
-            for (size_t i = 0; i < credentials.size(); ++i) {
-                const auto& item = credentials[i];
-                std::cout << "[" << std::setw(2) << (i + 1) << "] "
-                          << getCredentialTypeBadge(item) << " "
-                          << item->getService();
-                if (!item->getUsername().empty()) {
-                    std::cout << " (" << item->getUsername() << ")";
-                }
-                std::cout << "\n";
+    auto btnDelete = Button("Delete Credential", [&] {
+        auto creds = vault.getPolymorphicCredentials();
+        if (!creds.empty() && selectedCredIndex >= 0 && selectedCredIndex < static_cast<int>(creds.size())) {
+            if (handleDeleteCredential(vault, selectedCredIndex)) {
+                refreshCredentialLabels();
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
             }
-            std::cout << "\n";
         }
+    }, Theme::buttonOption(false));
 
-        std::cout << "Options:\n";
-        std::cout << "  [A] Add New Credential\n";
-        if (!credentials.empty()) {
-            std::cout << "  [1-" << credentials.size() << "] Select Credential for Details / Edit / Delete\n";
+    // --- Tab 1: Search View State ---
+    std::string searchQuery;
+    int selectedSearchIndex = 0;
+    std::vector<std::string> searchLabels;
+    std::vector<std::shared_ptr<Credential>> currentSearchResults;
+
+    Component inputSearch;
+
+    auto runSearchAction = [&] {
+        searchLabels.clear();
+        currentSearchResults.clear();
+        selectedSearchIndex = 0;
+        if (!searchQuery.empty()) {
+            currentSearchResults = vault.search(searchQuery);
+            for (size_t i = 0; i < currentSearchResults.size(); ++i) {
+                std::string badge = getTypeBadgeStr(currentSearchResults[i]);
+                searchLabels.push_back("[" + std::to_string(i + 1) + "] " + badge + " " + currentSearchResults[i]->getService());
+            }
         }
-        std::cout << "  [0] Back to Session Menu\n";
-        std::cout << "Enter choice: ";
-
-        std::string input;
-        if (!std::getline(std::cin, input)) {
-            break;
+        if (searchLabels.empty()) {
+            searchLabels.push_back("(No results matching query)");
         }
+    };
 
-        if (input == "0" || input == "b" || input == "B") {
-            break;
-        }
+    inputSearch = Input(&searchQuery, "Type query (Service, User, URL, Host...)", Theme::inputOption(false, [&] {
+        runSearchAction();
+    }));
 
-        if (input == "A" || input == "a") {
-            auto newCredential = promptCreatePolymorphicCredential();
-            if (newCredential) {
-                if (vault.addCredential(newCredential)) {
-                    std::cout << "\nCredential added successfully.\n";
-                } else {
-                    std::cout << "\nError: Failed to save credential to encrypted vault.\n";
+    auto btnRunSearch = Button("Search", runSearchAction, Theme::buttonOption(true));
+
+    auto searchMenu = Menu(&searchLabels, &selectedSearchIndex, Theme::menuOption([&] {
+        // Jump directly to matching credential in Tab 0 on Enter
+        if (!currentSearchResults.empty() &&
+            selectedSearchIndex >= 0 &&
+            selectedSearchIndex < static_cast<int>(currentSearchResults.size())) {
+            const auto& target = currentSearchResults[selectedSearchIndex];
+            auto allCreds = vault.getPolymorphicCredentials();
+            for (size_t i = 0; i < allCreds.size(); ++i) {
+                if (allCreds[i] == target) {
+                    selectedCredIndex = static_cast<int>(i);
+                    showPassword = false;
+                    previousCredIndex = selectedCredIndex;
+                    selectedTab = 0;
+                    break;
                 }
             }
-            continue;
         }
+    }));
+
+    // --- Tab 2: Password Tools State ---
+    std::string genLengthStr = "16";
+    bool optUpper = true, optLower = true, optDigits = true, optSymbols = true;
+    std::string generatedPassword;
+    float genEntropyRatio = 0.0f;
+    std::string genFeedback = "Click Generate to create a secure password";
+
+    Component inputGenLen;
+
+    auto generateAction = [&] {
+        size_t len = 16;
+        try { len = std::stoul(genLengthStr); } catch (...) { len = 16; }
+        if (len < 8) len = 8;
+        if (len > 128) len = 128;
+        genLengthStr = std::to_string(len);
+
+        PasswordOptions opts;
+        opts.length = len;
+        opts.uppercase = optUpper;
+        opts.lowercase = optLower;
+        opts.digits = optDigits;
+        opts.symbols = optSymbols;
 
         try {
-            size_t selectedIndex = std::stoul(input);
-            if (selectedIndex >= 1 && selectedIndex <= credentials.size()) {
-                viewCredentialDetails(vault, selectedIndex - 1);
-            } else {
-                std::cout << "Invalid choice. Please select a valid number from the list.\n";
-            }
-        } catch (...) {
-            std::cout << "Invalid input. Please enter a number or 'A'.\n";
+            generatedPassword = PasswordGenerator::generate(opts);
+            auto result = PasswordStrength::analyze(generatedPassword);
+            genEntropyRatio = std::min(1.0f, static_cast<float>(result.entropy) / 100.0f);
+            genFeedback = "Entropy: " + std::to_string(static_cast<int>(result.entropy)) + " bits — " + result.feedback;
+        } catch (const std::exception& e) {
+            genFeedback = std::string("Error: ") + e.what();
         }
-    }
-}
+    };
 
-/**
- * @brief Performs interactive keyword search across all fields of stored credentials.
- * @param vault Reference to the active MasterVault.
- */
-void handleSearchCredentials(MasterVault& vault) {
-    if (!ensureCredentialVaultUnlocked(vault)) {
-        return;
-    }
+    inputGenLen = Input(&genLengthStr, "16", Theme::inputOption(false, [&] {
+        generateAction();
+    }));
 
-    std::cout << "\n================ Search Credentials ================\n";
-    std::cout << "Enter search query: ";
-    std::string query;
-    if (!std::getline(std::cin, query) || query.empty()) {
-        std::cout << "Search cancelled.\n";
-        return;
-    }
+    auto checkUpper = Checkbox("Uppercase (A-Z)", &optUpper);
+    auto checkLower = Checkbox("Lowercase (a-z)", &optLower);
+    auto checkDigits = Checkbox("Digits (0-9)", &optDigits);
+    auto checkSymbols = Checkbox("Symbols (!@#$)", &optSymbols);
 
-    auto searchResults = vault.search(query);
-    if (searchResults.empty()) {
-        std::cout << "\nNo credentials matched query \"" << query << "\".\n";
-        return;
-    }
+    auto btnGenerate = Button("Generate Random Password", generateAction, Theme::buttonOption(true));
 
-    auto allCredentials = vault.getPolymorphicCredentials();
+    std::string evalInput;
+    std::string evalScoreStr = "--";
+    std::string evalRatingStr = "Enter password to evaluate";
+    float evalEntropyRatio = 0.0f;
 
-    while (true) {
-        std::cout << "\n--- Search Results for \"" << query << "\" ("
-                  << searchResults.size() << " found) ---\n";
+    Component inputEval;
 
-        for (size_t i = 0; i < searchResults.size(); ++i) {
-            const auto& item = searchResults[i];
-            std::cout << "[" << (i + 1) << "] "
-                      << getCredentialTypeBadge(item) << " "
-                      << item->getService();
-            if (!item->getUsername().empty()) {
-                std::cout << " (" << item->getUsername() << ")";
-            }
-            std::cout << "\n";
+    auto evalAction = [&] {
+        if (!evalInput.empty()) {
+            auto res = PasswordStrength::analyze(evalInput);
+            evalScoreStr = std::to_string(res.score) + "/100";
+            evalEntropyRatio = std::min(1.0f, static_cast<float>(res.entropy) / 100.0f);
+            evalRatingStr = res.feedback;
         }
+    };
 
-        std::cout << "\nEnter result number to view details (0 to go back): ";
-        std::string selectionInput;
-        if (!std::getline(std::cin, selectionInput) || selectionInput == "0") {
-            break;
-        }
+    inputEval = Input(&evalInput, "Test any password...", Theme::inputOption(false, [&] {
+        evalAction();
+    }));
 
-        try {
-            size_t resultIdx = std::stoul(selectionInput);
-            if (resultIdx >= 1 && resultIdx <= searchResults.size()) {
-                const auto& targetItem = searchResults[resultIdx - 1];
+    auto btnEval = Button("Evaluate Strength", evalAction, Theme::buttonOption(false));
 
-                // Map matched search pointer back to its canonical vault index
-                size_t canonicalIndex = 0;
-                bool found = false;
-                for (size_t k = 0; k < allCredentials.size(); ++k) {
-                    if (allCredentials[k] == targetItem || *allCredentials[k] == *targetItem) {
-                        canonicalIndex = k;
-                        found = true;
-                        break;
-                    }
-                }
+    // Tab-isolated component containers
+    auto tab0Container = Container::Horizontal({
+        Container::Vertical({ credMenu, btnAddCred }),
+        Container::Vertical({ btnToggleShow, btnEdit, btnDelete }),
+    });
 
-                if (found) {
-                    viewCredentialDetails(vault, canonicalIndex);
-                    // Refresh search results after potential edit or deletion
-                    searchResults = vault.search(query);
-                    allCredentials = vault.getPolymorphicCredentials();
-                    if (searchResults.empty()) {
-                        std::cout << "\nNo remaining credentials match query \"" << query << "\".\n";
-                        break;
-                    }
-                } else {
-                    std::cout << "Selected credential could not be located.\n";
-                }
-            } else {
-                std::cout << "Invalid choice. Please select a number between 1 and "
-                          << searchResults.size() << ".\n";
-            }
-        } catch (...) {
-            std::cout << "Invalid input. Please enter a valid number.\n";
-        }
-    }
-}
+    auto tab1Container = Container::Vertical({
+        Container::Horizontal({ inputSearch, btnRunSearch }),
+        searchMenu,
+    });
 
-/**
- * @brief Provides standalone utilities for password generation and entropy evaluation.
- */
-void handlePasswordTools() {
-    while (true) {
-        std::cout << "\n================ Password Tools ================\n";
-        std::cout << "  [1] Generate Random Password\n";
-        std::cout << "  [2] Evaluate Password Strength\n";
-        std::cout << "  [3] Back to Session Menu\n";
-        std::cout << "Enter choice (1-3): ";
+    auto tab2Container = Container::Horizontal({
+        Container::Vertical({ inputGenLen, checkUpper, checkLower, checkDigits, checkSymbols, btnGenerate }),
+        Container::Vertical({ inputEval, btnEval }),
+    });
 
-        std::string choice;
-        if (!std::getline(std::cin, choice) || choice == "3") {
-            break;
-        }
+    auto tab3Container = Container::Vertical({}); // Tab 3: Security Audit is display-only
+    auto tab4Container = Container::Vertical({}); // Tab 4: Lock & Logout
 
-        if (choice == "1") {
-            std::cout << "\n--- Random Password Generator ---\n";
-            std::cout << "Enter length (8-128, default 16): ";
-            std::string lengthInput;
-            size_t length = 16;
-            if (std::getline(std::cin, lengthInput) && !lengthInput.empty()) {
-                try {
-                    length = std::stoul(lengthInput);
-                    if (length < 8) length = 8;
-                    if (length > 128) length = 128;
-                } catch (...) {
-                    length = 16;
-                }
-            }
+    auto tabContainer = Container::Tab({
+        tab0Container,
+        tab1Container,
+        tab2Container,
+        tab3Container,
+        tab4Container,
+    }, &selectedTab);
 
-            auto askFlag = [](const std::string& promptLabel) -> bool {
-                std::cout << promptLabel << " (Y/n, default Y): ";
-                std::string input;
-                if (!std::getline(std::cin, input) || input.empty()) {
-                    return true;
-                }
-                return input[0] == 'Y' || input[0] == 'y';
-            };
+    // Combine top-level tab bar and active tab container
+    auto mainContainer = Container::Vertical({
+        tabMenu,
+        tabContainer,
+    });
 
-            PasswordOptions options;
-            options.length = length;
-            options.uppercase = askFlag("Include uppercase letters (A-Z)");
-            options.lowercase = askFlag("Include lowercase letters (a-z)");
-            options.digits = askFlag("Include digits (0-9)");
-            options.symbols = askFlag("Include symbols (!@#$%...)");
-
-            try {
-                std::string generated = PasswordGenerator::generate(options);
-                PasswordStrengthResult strength = PasswordStrength::analyze(generated);
-
-                std::cout << "\nGenerated Password : " << generated << "\n";
-                std::cout << "Strength Score     : " << strength.score << "/100\n";
-                std::cout << "Entropy Bits       : " << std::fixed << std::setprecision(2)
-                          << strength.entropy << " bits\n";
-                std::cout << "Evaluation         : " << strength.feedback << "\n";
-            } catch (const std::exception& exception) {
-                std::cout << "Generation failed: " << exception.what() << "\n";
-            }
-        } else if (choice == "2") {
-            std::cout << "\n--- Password Strength Evaluator ---\n";
-            std::cout << "Enter password to evaluate: ";
-            std::string password;
-            if (std::getline(std::cin, password) && !password.empty()) {
-                PasswordStrengthResult result = PasswordStrength::analyze(password);
-                std::cout << "\nAnalysis Result:\n";
-                std::cout << "  Strength Score : " << result.score << "/100\n";
-                std::cout << "  Entropy Bits   : " << std::fixed << std::setprecision(2)
-                          << result.entropy << " bits\n";
-
-                std::string rating;
-                if (result.score >= 80) rating = "Very Strong";
-                else if (result.score >= 60) rating = "Strong";
-                else if (result.score >= 40) rating = "Moderate";
-                else rating = "Weak";
-
-                std::cout << "  Rating         : " << rating << "\n";
-                std::cout << "  Feedback       : " << result.feedback << "\n";
-            } else {
-                std::cout << "Password cannot be empty.\n";
-            }
-        } else {
-            std::cout << "Invalid choice. Please enter 1, 2, or 3.\n";
-        }
-    }
-}
-
-/**
- * @brief Renders the security health dashboard with score bar, metrics, and audit warnings.
- * @param vault Reference to the active MasterVault.
- */
-void handleSecurityDashboard(MasterVault& vault) {
-    if (!ensureCredentialVaultUnlocked(vault)) {
-        return;
-    }
-
-    auto credentials = vault.getPolymorphicCredentials();
-
-    std::cout << "\n================ Security Health Dashboard ================\n";
-    if (credentials.empty()) {
-        std::cout << "Vault is currently empty. Add credentials to evaluate security health.\n";
-        return;
-    }
-
-    SecurityScore auditScore = PasswordAnalyzer::analyze(credentials);
-
-    // Compute detailed strength breakdown
-    size_t strongCount = 0;
-    size_t moderateCount = 0;
-    size_t weakCount = 0;
-
-    std::unordered_map<std::string, size_t> passwordFrequencyMap;
-    for (const auto& credential : credentials) {
-        if (!credential) continue;
-        ++passwordFrequencyMap[credential->getPassword()];
-        int score = PasswordStrength::score(credential->getPassword());
-        if (score >= 80) {
-            strongCount++;
-        } else if (score >= 50) {
-            moderateCount++;
-        } else {
-            weakCount++;
-        }
-    }
-
-    // Visual score progress bar (20 characters wide)
-    int clampedScore = std::max(0, std::min(100, auditScore.score));
-    int filledBars = (clampedScore * 20) / 100;
-    std::string progressBar;
-    for (int i = 0; i < 20; ++i) {
-        progressBar += (i < filledBars) ? "=" : "-";
-    }
-
-    std::string healthStatus;
-    if (clampedScore >= 80) {
-        healthStatus = "EXCELLENT";
-    } else if (clampedScore >= 60) {
-        healthStatus = "GOOD";
-    } else if (clampedScore >= 40) {
-        healthStatus = "MODERATE (Attention Needed)";
-    } else {
-        healthStatus = "CRITICAL (High Risk)";
-    }
-
-    std::cout << "Overall Vault Health Score : [" << progressBar << "] "
-              << clampedScore << "/100 (" << healthStatus << ")\n\n";
-
-    std::cout << "Statistics Summary:\n";
-    std::cout << "  Total Credentials Stored : " << credentials.size() << "\n";
-    std::cout << "  Strong Passwords         : " << strongCount << "\n";
-    std::cout << "  Moderate Passwords       : " << moderateCount << "\n";
-    std::cout << "  Weak Passwords           : " << weakCount << "\n";
-    std::cout << "  Reused Passwords         : " << auditScore.reusedPasswords << "\n";
-    std::cout << "  Old / Stale Passwords    : " << auditScore.oldPasswords << "\n\n";
-
-    std::cout << "Security Audit Warnings:\n";
-    bool warningFound = false;
-
-    for (const auto& credential : credentials) {
-        if (!credential) continue;
-
-        int score = PasswordStrength::score(credential->getPassword());
-        if (score < 50) {
-            warningFound = true;
-            std::cout << "  [WARNING] " << getCredentialTypeBadge(credential) << " \""
-                      << credential->getService() << "\": Weak password (" << score
-                      << "/100). Recommendation: "
-                      << PasswordStrength::feedback(credential->getPassword()) << "\n";
-        }
-
-        if (passwordFrequencyMap[credential->getPassword()] > 1) {
-            warningFound = true;
-            std::cout << "  [WARNING] " << getCredentialTypeBadge(credential) << " \""
-                      << credential->getService()
-                      << "\": Password is reused across multiple accounts!\n";
-        }
-    }
-
-    if (!warningFound) {
-        std::cout << "  [OK] No critical vulnerabilities found. All passwords meet recommended security levels.\n";
-    }
-}
-
-/**
- * @brief Coordinates the main interactive Master Session menu.
- * @param vault Reference to the authenticated MasterVault.
- * @return True to return to the initial user login menu; false to terminate completely.
- */
-bool runMasterVaultSession(MasterVault& vault) {
-    while (true) {
-        std::cout << "\n--- Master Vault Session (User: " << vault.getUsername() << ") ---\n";
-        std::cout << "  [1] Manage Credentials (Add, View, Edit, Delete, Details)\n";
-        std::cout << "  [2] Search Credentials\n";
-        std::cout << "  [3] Password Tools (Generate Password, Check Strength)\n";
-        std::cout << "  [4] Security Health Dashboard (Overall Score & Security Audit)\n";
-        std::cout << "  [5] Lock Vault / Switch User\n";
-        std::cout << "  [6] Exit\n";
-        std::cout << "Enter choice (1-6): ";
-
-        std::string choice;
-        if (!std::getline(std::cin, choice)) {
+    auto renderer = Renderer(mainContainer, [&] {
+        // Handle Tab 4: Lock & Logout
+        if (selectedTab == 4) {
             vault.lock();
-            std::cout << "\nVault locked. Application closed.\n";
-            return false;
+            exit();
+            return text("Logging out and locking vault...") | bold | color(Theme::Warning);
         }
 
-        try {
-            if (choice == "1") {
-                handleManageCredentials(vault);
-            } else if (choice == "2") {
-                handleSearchCredentials(vault);
-            } else if (choice == "3") {
-                handlePasswordTools();
-            } else if (choice == "4") {
-                handleSecurityDashboard(vault);
-            } else if (choice == "5") {
-                vault.lock();
-                std::cout << "\nVault locked.\n";
-                return true; // Return to login menu
-            } else if (choice == "6") {
-                vault.lock();
-                std::cout << "\nVault locked. Application closed.\n";
-                return false; // Exit application
+        // Top Navigation Bar
+        auto headerBar = hbox({
+            text(" VaultSync ") | bold | color(Theme::Primary) | bgcolor(Theme::CardBg),
+            text(" ❯ ") | color(Theme::Subtle),
+            text(vault.getUsername()) | bold | color(Theme::TextBright),
+            text(" (AES-256-GCM Unlocked) ") | color(Theme::Success),
+            filler(),
+            tabMenu->Render(),
+        }) | borderRounded | color(Theme::Subtle);
+
+        Element bodyContent;
+
+        if (selectedTab == 0) {
+            // === TAB 0: Credentials Split View ===
+            auto creds = vault.getPolymorphicCredentials();
+
+            // Auto-hide password when selecting a different credential
+            if (selectedCredIndex != previousCredIndex) {
+                showPassword = false;
+                previousCredIndex = selectedCredIndex;
+            }
+
+            // Left Pane: List
+            auto leftPane = vbox({
+                hbox({ text(" Credentials ") | bold | color(Theme::Primary), filler(), text(std::to_string(creds.size()) + " total") | dim }),
+                separator() | color(Theme::Subtle),
+                credMenu->Render() | flex_grow,
+                separator() | color(Theme::Subtle),
+                btnAddCred->Render() | center,
+            }) | size(WIDTH, EQUAL, 38) | borderRounded | color(Theme::Subtle);
+
+            // Right Pane: Detail Card
+            Element rightPane;
+            if (creds.empty() || selectedCredIndex < 0 || selectedCredIndex >= static_cast<int>(creds.size())) {
+                rightPane = vbox({
+                    filler(),
+                    text(" No Credential Selected ") | bold | color(Theme::Muted) | center,
+                    text(" Choose a credential from the list or add a new one. ") | dim | color(Theme::Subtle) | center,
+                    filler(),
+                }) | flex_grow | borderRounded | color(Theme::Subtle);
             } else {
-                std::cout << "\nInvalid choice. Please enter 1, 2, 3, 4, 5, or 6.\n";
+                const auto& active = creds[selectedCredIndex];
+                std::string displayPass = showPassword ? active->getPassword() : std::string(active->getPassword().size(), '*');
+
+                Elements detailRows;
+                detailRows.push_back(hbox({ text(" Service   : ") | bold | color(Theme::TextBright), text(active->getService()) | bold | color(Theme::Primary) }));
+                detailRows.push_back(hbox({ text(" Type      : ") | bold | color(Theme::TextBright), Theme::badge(active->getType()), text(" " + active->getType()) | dim }));
+                detailRows.push_back(hbox({ text(" Username  : ") | bold | color(Theme::TextBright), text(active->getUsername().empty() ? "(none)" : active->getUsername()) | color(Theme::TextBright) }));
+                detailRows.push_back(hbox({ text(" Password  : ") | bold | color(Theme::TextBright), text(displayPass) | bold | color(showPassword ? Theme::Warning : Theme::Muted) }));
+                detailRows.push_back(hbox({ text(" Notes     : ") | bold | color(Theme::TextBright), text(active->getNotes().empty() ? "(none)" : active->getNotes()) | color(Theme::Muted) }));
+
+                if (auto web = std::dynamic_pointer_cast<WebCredential>(active)) {
+                    detailRows.push_back(hbox({ text(" URL       : ") | bold | color(Theme::Primary), text(web->getUrl()) | color(Theme::Primary) }));
+                } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(active)) {
+                    detailRows.push_back(hbox({ text(" SSID      : ") | bold | color(Theme::Success), text(wifi->getSsid()) | color(Theme::Success) }));
+                    detailRows.push_back(hbox({ text(" Protocol  : ") | bold | color(Theme::Success), text(wifi->getSecurityType()) | color(Theme::Success) }));
+                } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(active)) {
+                    detailRows.push_back(hbox({ text(" Host      : ") | bold | color(Theme::Secondary), text(ssh->getHost()) | color(Theme::Secondary) }));
+                    detailRows.push_back(hbox({ text(" Port      : ") | bold | color(Theme::Secondary), text(std::to_string(ssh->getPort())) | color(Theme::Secondary) }));
+                }
+
+                detailRows.push_back(separator() | color(Theme::Subtle));
+                detailRows.push_back(hbox({ text(" Created   : ") | dim, text(formatTimestamp(active->getCreatedAt())) | dim }));
+
+                rightPane = vbox({
+                    text(" Credential Details ") | bold | color(Theme::Primary),
+                    separator() | color(Theme::Subtle),
+                    vbox(std::move(detailRows)) | flex_grow,
+                    separator() | color(Theme::Subtle),
+                    hbox({
+                        btnToggleShow->Render(),
+                        text("  "),
+                        btnEdit->Render(),
+                        text("  "),
+                        btnDelete->Render(),
+                    }) | center,
+                }) | flex_grow | borderRounded | color(Theme::Primary);
             }
-        } catch (const UnauthorizedAccessException& exception) {
-            std::cout << "\n[SECURITY ALERT] Unauthorized access: " << exception.what() << "\n";
-        } catch (const WrongPasswordException& exception) {
-            std::cout << "\n[AUTH ERROR] Authentication failed: " << exception.what() << "\n";
-        } catch (const LockoutException& exception) {
-            std::cout << "\n[LOCKOUT ALERT] Access is locked out: " << exception.what() << "\n";
-        } catch (const CorruptedVaultException& exception) {
-            std::cout << "\n[CORRUPTION ERROR] Vault data corrupted: " << exception.what() << "\n";
-        } catch (const FileException& exception) {
-            std::cout << "\n[I/O ERROR] File operation failed: " << exception.what() << "\n";
-        } catch (const VaultException& exception) {
-            std::cout << "\n[VAULT ERROR] Operation failed: " << exception.what() << "\n";
-        } catch (const std::exception& exception) {
-            std::cout << "\n[UNEXPECTED ERROR] An error occurred: " << exception.what() << "\n";
-        }
-    }
-    vault.lock();
-    return false;
-}
 
-/**
- * @brief Prompts for username and master password to initialize a new user vault.
- * @param vault Reference to the active MasterVault.
- */
-void handleCreateMasterVault(MasterVault& vault) {
-    std::cout << "\nEnter username: ";
-    std::string username;
-    if (!std::getline(std::cin, username) || username.empty()) {
-        std::cout << "Error: Username cannot be empty.\n";
-        return;
-    }
+            bodyContent = hbox({ leftPane, text(" "), rightPane }) | flex_grow;
 
-    if (MasterVault::existsForUser(username)) {
-        std::cout << "\nA Master Vault already exists for this username.\n";
-        std::cout << "Please use Login to Master Vault.\n";
-        return;
-    }
+        } else if (selectedTab == 1) {
+            // === TAB 1: Search View ===
+            bodyContent = vbox({
+                text(" Search Encrypted Credentials ") | bold | color(Theme::Primary),
+                text(" Instant query match across service, username, notes, URL, SSID, and host. ") | dim | color(Theme::Muted),
+                separator() | color(Theme::Subtle),
+                hbox({
+                    inputSearch->Render() | flex_grow,
+                    text(" "),
+                    btnRunSearch->Render(),
+                }) | size(HEIGHT, EQUAL, 3),
+                separator() | color(Theme::Subtle),
+                searchMenu->Render() | flex_grow | borderRounded | color(Theme::Subtle),
+            }) | flex_grow | borderRounded | color(Theme::Primary);
 
-    std::string masterPassword;
-    while (true) {
-        if (!std::cin.good()) {
-            return;
-        }
-        masterPassword = TerminalUtils::readHiddenPassword("Create master password: ");
-        if (!std::cin.good()) {
-            return;
-        }
-        if (masterPassword.empty()) {
-            std::cout << "Error: Master password cannot be empty.\n";
-            continue;
-        }
+        } else if (selectedTab == 2) {
+            // === TAB 2: Password Tools ===
+            auto genPane = vbox({
+                text(" Random Password Generator ") | bold | color(Theme::Primary),
+                separator() | color(Theme::Subtle),
+                hbox({ text(" Length (8-128) : ") | bold, inputGenLen->Render() | size(WIDTH, EQUAL, 8) }),
+                checkUpper->Render(),
+                checkLower->Render(),
+                checkDigits->Render(),
+                checkSymbols->Render(),
+                separator() | color(Theme::Subtle),
+                btnGenerate->Render() | center,
+                separator() | color(Theme::Subtle),
+                hbox({ text(" Generated : ") | bold, text(generatedPassword) | bold | color(Theme::Warning) }),
+                gauge(genEntropyRatio) | color(genEntropyRatio > 0.7f ? Theme::Success : (genEntropyRatio > 0.4f ? Theme::Warning : Theme::Danger)),
+                text(genFeedback) | dim | color(Theme::Muted),
+            }) | flex_grow | borderRounded | color(Theme::Primary);
 
-        std::string confirmPassword = TerminalUtils::readHiddenPassword("Confirm master password: ");
-        if (!std::cin.good()) {
-            return;
-        }
-        if (masterPassword != confirmPassword) {
-            std::cout << "Error: Passwords do not match. Please try again.\n";
-            continue;
-        }
-        break;
-    }
+            auto evalPane = vbox({
+                text(" Password Strength Evaluator ") | bold | color(Theme::Secondary),
+                separator() | color(Theme::Subtle),
+                hbox({ text(" Test Password : ") | bold, inputEval->Render() | flex_grow }),
+                separator() | color(Theme::Subtle),
+                btnEval->Render() | center,
+                separator() | color(Theme::Subtle),
+                hbox({ text(" Strength Score : ") | bold, text(evalScoreStr) | bold | color(Theme::Primary) }),
+                gauge(evalEntropyRatio) | color(evalEntropyRatio > 0.7f ? Theme::Success : (evalEntropyRatio > 0.4f ? Theme::Warning : Theme::Danger)),
+                text(evalRatingStr) | color(Theme::TextBright),
+            }) | flex_grow | borderRounded | color(Theme::Secondary);
 
-    try {
-        if (vault.create(username, masterPassword)) {
-            std::cout << "\nMaster vault created successfully.\n";
-            std::cout << "Master vault loaded.\n";
-            runMasterVaultSession(vault);
-        } else {
-            std::cout << "\nError: Failed to create master vault.\n";
-        }
-    } catch (const VaultException& exception) {
-        std::cout << "\n[VAULT ERROR] " << exception.what() << "\n";
-    }
-}
+            bodyContent = hbox({ genPane, text(" "), evalPane }) | flex_grow;
 
-/**
- * @brief Authenticates a user into their Master Vault session.
- * @param vault Reference to the active MasterVault.
- * @return True to continue to main loop; false to exit.
- */
-bool handleLoginMasterVault(MasterVault& vault) {
-    std::cout << "\nEnter username: ";
-    std::string username;
-    if (!std::getline(std::cin, username) || username.empty()) {
-        std::cout << "Error: Username cannot be empty.\n";
-        return true;
-    }
+        } else if (selectedTab == 3) {
+            // === TAB 3: Security Health Dashboard ===
+            auto creds = vault.getPolymorphicCredentials();
+            SecurityScore score = PasswordAnalyzer::analyze(creds);
 
-    if (!MasterVault::existsForUser(username)) {
-        std::cout << "\nNo master vault found for this username.\n";
-        return true;
-    }
+            float scoreRatio = std::min(1.0f, static_cast<float>(score.score) / 100.0f);
+            Color scoreColor = (score.score >= 80) ? Theme::Success : (score.score >= 50 ? Theme::Warning : Theme::Danger);
 
-    int remainingSeconds = 0;
-    if (MasterVault::isMasterLockedOut(username, remainingSeconds)) {
-        std::cout << "\nMaster Vault login is temporarily locked.\n";
-        std::cout << "Please try again in " << remainingSeconds << " seconds.\n";
-        return true;
-    }
-
-    while (true) {
-        if (MasterVault::isMasterLockedOut(username, remainingSeconds)) {
-            std::cout << "\nMaster Vault login is temporarily locked.\n";
-            std::cout << "Please try again in " << remainingSeconds << " seconds.\n";
-            return true;
-        }
-
-        std::string masterPassword = TerminalUtils::readHiddenPassword("Enter master password: ");
-        if (masterPassword.empty() && !std::cin.good()) {
-            return true;
-        }
-
-        int attemptsRemaining = 0;
-        try {
-            if (vault.unlockMaster(username, masterPassword, attemptsRemaining)) {
-                std::cout << "\nMaster vault loaded.\n";
-                return runMasterVaultSession(vault);
+            Elements warningsList;
+            std::unordered_map<std::string, size_t> passFreq;
+            for (const auto& c : creds) {
+                if (!c) continue;
+                passFreq[c->getPassword()]++;
+                int s = PasswordStrength::score(c->getPassword());
+                if (s < 50) {
+                    warningsList.push_back(text(" ⚠ [WEAK] " + c->getService() + " score " + std::to_string(s) + "/100 — " + PasswordStrength::feedback(c->getPassword())) | color(Theme::Danger));
+                }
             }
-        } catch (const VaultException& exception) {
-            std::cout << "\n[VAULT ERROR] " << exception.what() << "\n";
-            return true;
+            for (const auto& c : creds) {
+                if (c && passFreq[c->getPassword()] > 1) {
+                    warningsList.push_back(text(" ⚠ [REUSED] " + c->getService() + " shares its password with another account!") | color(Theme::Warning));
+                }
+            }
+            if (warningsList.empty()) {
+                warningsList.push_back(text(" ✓ All stored credentials meet recommended security standards.") | color(Theme::Success));
+            }
+
+            bodyContent = vbox({
+                text(" Vault Security Health Dashboard ") | bold | color(Theme::Primary),
+                text(" Real-time cryptographic entropy, reuse detection, and vulnerability scan ") | dim | color(Theme::Muted),
+                separator() | color(Theme::Subtle),
+                hbox({
+                    vbox({
+                        text(" Security Health Score ") | bold | color(Theme::TextBright),
+                        text(" " + std::to_string(score.score) + " / 100 ") | bold | color(scoreColor),
+                        gauge(scoreRatio) | color(scoreColor),
+                    }) | flex_grow | borderRounded | color(scoreColor),
+                    vbox({
+                        hbox({ text(" Total Credentials  : ") | bold, text(std::to_string(creds.size())) }),
+                        hbox({ text(" Reused Passwords   : ") | bold, text(std::to_string(score.reusedPasswords)) | color(score.reusedPasswords > 0 ? Theme::Warning : Theme::Success) }),
+                        hbox({ text(" Old/Stale Accounts : ") | bold, text(std::to_string(score.oldPasswords)) }),
+                    }) | flex_grow | borderRounded | color(Theme::Subtle),
+                }),
+                separator() | color(Theme::Subtle),
+                text(" Audit Findings & Recommendations : ") | bold | color(Theme::TextBright),
+                vbox(std::move(warningsList)) | flex_grow,
+            }) | flex_grow | borderRounded | color(Theme::Primary);
         }
 
-        if (attemptsRemaining > 0) {
-            std::cout << "Invalid master password.\n";
-            std::cout << "Attempts remaining: " << attemptsRemaining << "\n";
-        } else {
-            std::cout << "\nMaximum login attempts exceeded.\n";
-            std::cout << "Master Vault login temporarily locked.\n";
-            return true;
-        }
-    }
+        // Bottom Status Bar
+        auto statusBar = hbox({
+            text(" [Tab] Navigate Focus   [Enter] Select/Trigger   [Ctrl+C] Force Quit ") | dim | color(Theme::Muted),
+            filler(),
+            text("OpenCode Dark Theme") | dim | color(Theme::Subtle),
+        });
+
+        return vbox({
+            headerBar,
+            text(" "),
+            bodyContent,
+            text(" "),
+            statusBar,
+        });
+    });
+
+    screen.Loop(renderer);
 }
 
 } // anonymous namespace
 
-int main() {
-    std::cout << "VaultSync - Secure Password Manager\n";
+// ============================================================================
+// Application Entry Point
+// ============================================================================
 
+int main() {
     MasterVault vault;
 
     while (true) {
-        std::cout << "\n1. Create Master Vault\n";
-        std::cout << "2. Login to Master Vault\n";
-        std::cout << "3. Exit\n";
-        std::cout << "Enter choice (1-3): ";
+        auto screen = ScreenInteractive::Fullscreen();
+        auto exit = screen.ExitLoopClosure();
 
-        std::string choice;
-        if (!std::getline(std::cin, choice)) {
-            std::cout << "\nApplication closed.\n";
-            break;
-        }
+        std::vector<std::string> options = {
+            "  [1] Login to Master Vault",
+            "  [2] Create New Master Vault",
+            "  [3] Exit Application"
+        };
+        int selectedOption = 0;
+        int userAction = 0;
+        auto menu = Menu(&options, &selectedOption, Theme::menuOption([&] {
+            userAction = selectedOption + 1;
+            exit();
+        }));
 
-        try {
-            if (choice == "1") {
-                handleCreateMasterVault(vault);
-            } else if (choice == "2") {
-                bool shouldContinue = handleLoginMasterVault(vault);
-                if (!shouldContinue) {
-                    break;
-                }
-            } else if (choice == "3") {
-                std::cout << "\nApplication closed.\n";
-                break;
-            } else {
-                std::cout << "\nInvalid choice. Please enter 1, 2, or 3.\n";
+        auto btnSelect = Button("Continue", [&] {
+            userAction = selectedOption + 1;
+            exit();
+        }, Theme::buttonOption(true));
+
+        auto btnExit = Button("Exit", [&] {
+            userAction = 3;
+            exit();
+        }, Theme::buttonOption(false));
+
+        auto container = Container::Vertical({
+            menu,
+            Container::Horizontal({ btnSelect, btnExit }),
+        });
+
+        auto renderer = Renderer(container, [&] {
+            auto welcomeCard = vbox({
+                text(" ╔══════════════════════════════════════════╗ ") | bold | color(Theme::Primary),
+                text(" ║        VaultSync Security Core          ║ ") | bold | color(Theme::Primary),
+                text(" ║   Secure Polymorphic Password Manager   ║ ") | dim | color(Theme::Muted),
+                text(" ╚══════════════════════════════════════════╝ ") | bold | color(Theme::Primary),
+                separator() | color(Theme::Subtle),
+                text(" Select an action to proceed : ") | bold | color(Theme::TextBright),
+                menu->Render() | borderRounded | color(Theme::Subtle),
+                separator() | color(Theme::Subtle),
+                hbox({ btnSelect->Render(), text("  "), btnExit->Render() }) | center,
+            }) | size(WIDTH, EQUAL, 52) | borderRounded | color(Theme::Primary);
+
+            return vbox({
+                filler(),
+                hbox({ filler(), welcomeCard, filler() }),
+                filler(),
+                hbox({
+                    text(" VaultSync C++17 | OpenSSL AES-256-GCM | FTXUI ") | dim | color(Theme::Subtle),
+                    filler(),
+                    text("Use [↑/↓] to navigate, [Enter] to select") | dim | color(Theme::Subtle),
+                }),
+            });
+        });
+
+        screen.Loop(renderer);
+
+        if (userAction == 1) {
+            if (handleLoginMasterVault(vault)) {
+                runMasterVaultSession(vault);
             }
-        } catch (const VaultException& exception) {
-            std::cout << "\n[VAULT ERROR] " << exception.what() << "\n";
-        } catch (const std::exception& exception) {
-            std::cout << "\n[ERROR] " << exception.what() << "\n";
+        } else if (userAction == 2) {
+            handleCreateMasterVault(vault);
+        } else {
+            std::cout << "\nVaultSync terminated cleanly.\n";
+            break;
         }
     }
 
