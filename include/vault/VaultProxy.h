@@ -5,6 +5,7 @@
 #include "storage/Vault.h"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,11 +15,14 @@
  *
  * Implements the Proxy design pattern. Any attempted access to the underlying vault
  * throws an UnauthorizedAccessException unless authenticated is true and the vault is unlocked.
+ * Sensitive operations (revealing secret passwords, modifying secrets, and deleting credentials)
+ * additionally enforce credential-password authorization via the configured password verifier.
  */
 class VaultProxy : public IVault {
 private:
     Vault& vault;
     bool authenticated;
+    std::function<bool(const std::string&)> passwordVerifier;
 
     /**
      * @brief Validates authentication and vault state, throwing an exception if unauthorized.
@@ -31,8 +35,16 @@ public:
      * @brief Constructs a VaultProxy wrapping the given Vault instance.
      * @param vault Reference to the underlying Vault to protect.
      * @param authenticated Initial authentication state (default: false).
+     * @param verifier Optional callback function for credential password verification.
      */
-    explicit VaultProxy(Vault& vault, bool authenticated = false);
+    explicit VaultProxy(Vault& vault, bool authenticated = false,
+                        std::function<bool(const std::string&)> verifier = nullptr);
+
+    /**
+     * @brief Sets or updates the password verification callback.
+     * @param verifier Callback function returning true if the credential password is valid.
+     */
+    void setPasswordVerifier(std::function<bool(const std::string&)> verifier);
 
     /**
      * @brief Sets the authentication status of the proxy.
@@ -52,17 +64,48 @@ public:
      * @param index The zero-based index of the credential to update.
      * @param credential The replacement credential.
      * @return True if update succeeded; false otherwise.
-     * @throws UnauthorizedAccessException If authorization check fails.
+     * @throws UnauthorizedAccessException If authorization check fails or secret change is unverified.
      */
     bool updateCredential(size_t index, std::shared_ptr<Credential> credential) override;
 
     /**
+     * @brief Updates a credential at the specified index, authorizing secret changes with password.
+     * @param index The zero-based index of the credential to update.
+     * @param credential The replacement credential.
+     * @param credPassword Plaintext credential password used if secret was altered.
+     * @return True if update succeeded; false otherwise.
+     * @throws UnauthorizedAccessException If authorization check fails or credential password invalid.
+     */
+    bool updateCredential(size_t index, std::shared_ptr<Credential> credential,
+                          const std::string& credPassword) override;
+
+    /**
      * @brief Deletes a credential at the specified index after authorization check.
+     * @note When a password verifier is configured, this overload requires password authorization.
      * @param index The zero-based index of the credential to delete.
      * @return True if deletion succeeded; false otherwise.
-     * @throws UnauthorizedAccessException If authorization check fails.
+     * @throws UnauthorizedAccessException If authorization check fails or password is missing.
      */
     bool deleteCredential(size_t index) override;
+
+    /**
+     * @brief Deletes a credential at the specified index with explicit credential password authorization and confirmation.
+     * @param index The zero-based index of the credential to delete.
+     * @param credPassword Plaintext credential password authorizing the deletion.
+     * @param confirmed Explicit deletion confirmation flag (defaults to true).
+     * @return True if deletion succeeded; false otherwise.
+     * @throws UnauthorizedAccessException If authorization check fails, confirmation is false, or password invalid.
+     */
+    bool deleteCredential(size_t index, const std::string& credPassword, bool confirmed = true) override;
+
+    /**
+     * @brief Reveals the plaintext secret password after verifying credential password.
+     * @param index The zero-based index of the credential.
+     * @param credPassword Plaintext credential password authorizing reveal.
+     * @return Stored plaintext password string.
+     * @throws UnauthorizedAccessException If authorization check fails or credential password invalid.
+     */
+    std::string revealPassword(size_t index, const std::string& credPassword) const override;
 
     /**
      * @brief Retrieves all credentials after authorization check.

@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <iomanip>
 #include <sys/stat.h>
+#include <chrono>
+#include <thread>
 
 #include "crypto/ICipher.h"
 #include "crypto/XORCipher.h"
@@ -28,6 +30,7 @@
 #include "security/PasswordStrength.h"
 #include "security/PasswordAnalyzer.h"
 #include "crypto/AESCipher.h"
+#include "ui/TerminalUtils.h"
 
 namespace fs = std::filesystem;
 
@@ -358,8 +361,22 @@ void testMasterVaultEditCredential() {
 
     // 2. Edit credential at index 0
     Credential updated("GitHub Enterprise", "newuser", "newpass456", "new notes");
-    bool editOk = vault.updateCredential(0, updated);
-    assert(editOk && "MasterVault::updateCredential failed!");
+    
+    // Domain rule: changing secret password without credential password must be rejected!
+    bool unauthEdit = vault.updateCredential(0, updated);
+    assert(!unauthEdit && "Updating credential secret without password must be rejected!");
+
+    // Domain rule: changing secret password with wrong credential password must be rejected!
+    bool wrongPassEdit = vault.updateCredential(0, updated, "WrongPassword");
+    assert(!wrongPassEdit && "Updating credential secret with wrong password must be rejected!");
+
+    // Verify original password and metadata preserved after unauthorized attempts
+    assert(vault.getCredentials()[0].getPassword() == "oldpass123");
+    assert(vault.getCredentials()[0].getService() == "GitHub");
+
+    // Domain rule: changing secret password with valid credential password succeeds!
+    bool editOk = vault.updateCredential(0, updated, credPass);
+    assert(editOk && "MasterVault::updateCredential with valid credPass failed!");
 
     // 3. Verify in-memory update
     const auto& creds = vault.getCredentials();
@@ -368,8 +385,32 @@ void testMasterVaultEditCredential() {
     assert(creds[0].getPassword() == "newpass456");
     assert(creds[0].getNotes() == "new notes");
 
+    // Test non-sensitive metadata update (password unchanged): does not require re-authentication
+    Credential metaUpdated("GitHub Enterprise Pro", "newuser", "newpass456", "updated notes");
+    bool metaEditOk = vault.updateCredential(0, metaUpdated);
+    assert(metaEditOk && "Updating non-sensitive metadata only should not require re-authentication!");
+    assert(vault.getCredentials()[0].getService() == "GitHub Enterprise Pro");
+    assert(vault.getCredentials()[0].getNotes() == "updated notes");
+
+    // Test non-sensitive metadata update with empty/untouched password field:
+    // Must succeed without credential password and must NOT erase stored password
+    Credential emptyPassUpdated("GitHub Enterprise Suite", "suiteuser", "", "suite notes");
+    bool emptyPassEditOk = vault.updateCredential(0, emptyPassUpdated);
+    assert(emptyPassEditOk && "Updating metadata with empty password must succeed without credential password!");
+    assert(vault.getCredentials()[0].getService() == "GitHub Enterprise Suite");
+    assert(vault.getCredentials()[0].getUsername() == "suiteuser");
+    assert(vault.getCredentials()[0].getPassword() == "newpass456" && "Empty password field must NOT erase existing stored password!");
+    assert(vault.getCredentials()[0].getNotes() == "suite notes");
+
+    // Test failed authorization preserving original password
+    Credential unauthChange("GitHub ShouldFail", "failuser", "failed_secret", "fail notes");
+    bool failedChange = vault.updateCredential(0, unauthChange, "WrongPass123");
+    assert(!failedChange && "Unauthorized secret change must be rejected!");
+    assert(vault.getCredentials()[0].getService() == "GitHub Enterprise Suite" && "Original service preserved on failure!");
+    assert(vault.getCredentials()[0].getPassword() == "newpass456" && "Original password preserved on failure!");
+
     // 4. Out-of-bounds update returns false
-    bool oobUpdate = vault.updateCredential(5, updated);
+    bool oobUpdate = vault.updateCredential(5, updated, credPass);
     assert(!oobUpdate && "Out-of-bounds update should fail!");
 
     // 5. Lock vault and reload from disk to verify persistence
@@ -384,10 +425,10 @@ void testMasterVaultEditCredential() {
 
     assert(reloadedVault.getCredentialCount() == 1);
     const auto& reloadedCreds = reloadedVault.getCredentials();
-    assert(reloadedCreds[0].getService() == "GitHub Enterprise");
-    assert(reloadedCreds[0].getUsername() == "newuser");
+    assert(reloadedCreds[0].getService() == "GitHub Enterprise Suite");
+    assert(reloadedCreds[0].getUsername() == "suiteuser");
     assert(reloadedCreds[0].getPassword() == "newpass456");
-    assert(reloadedCreds[0].getNotes() == "new notes");
+    assert(reloadedCreds[0].getNotes() == "suite notes");
 
     // 6. Verify plaintext password is NOT in raw encrypted file
     std::ifstream raw(testVaultPath, std::ios::binary);
@@ -434,13 +475,26 @@ void testMasterVaultDeleteCredential() {
     assert(vault.verifyCredentialPassword(credPass) && "Correct credential password must authorize deletion!");
 
     // 3. Delete first credential ("GitHub")
-    bool deleteOk = vault.deleteCredential(0);
+    // Domain rule: calling deleteCredential without credential password must be rejected!
+    bool unauthDelete = vault.deleteCredential(0);
+    assert(!unauthDelete && "Deleting credential without password must fail!");
+
+    // Domain rule: calling deleteCredential with wrong password must be rejected!
+    bool wrongPassDelete = vault.deleteCredential(0, "WrongPassword");
+    assert(!wrongPassDelete && "Deleting credential with wrong password must fail!");
+
+    // Domain rule: calling deleteCredential without explicit confirmation must fail!
+    bool unconfirmedDelete = vault.deleteCredential(0, credPass, false);
+    assert(!unconfirmedDelete && "Deleting credential without explicit confirmation must fail!");
+
+    // Domain rule: calling deleteCredential with valid credential password and confirmation succeeds!
+    bool deleteOk = vault.deleteCredential(0, credPass, true);
     assert(deleteOk && "MasterVault::deleteCredential failed!");
     assert(vault.getCredentialCount() == 1);
     assert(vault.getCredentials()[0].getService() == "AWS");
 
     // 4. Out-of-bounds delete returns false
-    bool oobDelete = vault.deleteCredential(5);
+    bool oobDelete = vault.deleteCredential(5, credPass);
     assert(!oobDelete && "Out-of-bounds delete should fail!");
 
     // 5. Lock vault and reload from disk to verify persistence
@@ -464,7 +518,9 @@ void testMasterVaultDeleteCredential() {
     assert(rawData.find("supertoken999") == std::string::npos && "Deleted password leaked in file!");
 
     // 7. Delete remaining credential to verify empty vault persistence
-    bool deletedRem = reloadedVault.deleteCredential(0);
+    bool unauthRemDelete = reloadedVault.deleteCredential(0);
+    assert(!unauthRemDelete && "Deleting remaining credential without password must fail!");
+    bool deletedRem = reloadedVault.deleteCredential(0, credPass);
     assert(deletedRem);
     assert(reloadedVault.getCredentialCount() == 0);
 
@@ -849,6 +905,333 @@ void testMasterVaultAESAndProxyIntegration() {
     std::cout << "  --> PASS: MasterVault AES-256-GCM encryption, VaultProxy access control, and polymorphic persistence verified.\n\n";
 }
 
+void testPhase2And3AuthorizationAndFlow() {
+    std::cout << "[Test 13] Phase 2 & 3: Authorization Refactor, Revised Flow, and Session Security\n";
+
+    const std::string testUser = "testuser_phase23";
+    const std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    MasterVault vault;
+    std::string masterPass = "MasterSecure#2026";
+    std::string credPass = "CredSecure#2026";
+
+    // 1. Initial State: Locked
+    assert(vault.getSessionState() == MasterVault::SessionState::Locked);
+    assert(!vault.isMasterUnlocked());
+    assert(!vault.isCredentialsUnlocked());
+
+    // 2. Setup vault and credential password
+    bool created = vault.create(testUser, masterPass);
+    assert(created);
+    bool setup = vault.setupCredentialPassword(credPass);
+    assert(setup);
+
+    // Add credentials for testing
+    auto webCred = std::make_shared<WebCredential>("GitHub", "alice", "gh_secret_key_123", "personal token", "https://github.com");
+    auto wifiCred = std::make_shared<WiFiCredential>("OfficeWiFi", "", "wifi_wpa3_pass", "hq", "OfficeNet_Secure", "WPA3");
+    assert(vault.addCredential(webCred));
+    assert(vault.addCredential(wifiCred));
+    assert(vault.getCredentialCount() == 2);
+
+    // 3. Lock vault completely (simulating fresh application launch)
+    vault.lock();
+    assert(vault.getSessionState() == MasterVault::SessionState::Locked);
+    assert(!vault.isMasterUnlocked());
+    assert(!vault.isCredentialsUnlocked());
+
+    // 4. Phase 3 Revised Login Flow:
+    // User enters Master Password -> opens dashboard immediately in MasterAuthenticated state WITHOUT credential password prompt
+    int masterAttempts = 0;
+    bool masterOk = vault.unlockMaster(testUser, masterPass, masterAttempts);
+    assert(masterOk && "Master authentication must succeed with valid master password!");
+    assert(vault.isMasterUnlocked() && "Master vault must be unlocked!");
+    assert(!vault.isCredentialsUnlocked() && "Credential vault must NOT be unlocked yet (2-tier isolation)!");
+    assert(vault.getSessionState() == MasterVault::SessionState::MasterAuthenticated);
+
+    // 5. Low-risk tools must work immediately in MasterAuthenticated state
+    std::string generatedPass = PasswordGenerator::generate(20, true, true, true, true);
+    assert(generatedPass.length() == 20 && "PasswordGenerator must work in MasterAuthenticated state!");
+    PasswordStrengthResult strength = PasswordStrength::analyze(generatedPass);
+    assert(strength.score >= 80);
+
+    // 6. Credential data is protected and not leaked prior to unlock
+    assert(vault.getCredentialCount() == 0 && "Credentials count must be 0 before unlock!");
+    assert(vault.getCredentials().empty() && "getCredentials() must be empty before unlock!");
+    assert(vault.getPolymorphicCredentials().empty() && "getPolymorphicCredentials() must be empty before unlock!");
+    assert(vault.search("GitHub").empty() && "search() must return empty results before unlock!");
+    assert(vault.getCredential(0) == nullptr && "getCredential() must return nullptr before unlock!");
+
+    // Direct proxy calls must throw UnauthorizedAccessException
+    bool proxyBlocked = false;
+    try {
+        vault.getProxy().getCredentials();
+    } catch (const UnauthorizedAccessException&) {
+        proxyBlocked = true;
+    }
+    assert(proxyBlocked && "Direct VaultProxy access must throw UnauthorizedAccessException before unlock!");
+
+    // Direct reveal/copy attempts before unlock must throw UnauthorizedAccessException
+    bool revealBlocked = false;
+    try {
+        vault.revealPassword(0, credPass);
+    } catch (const UnauthorizedAccessException&) {
+        revealBlocked = true;
+    }
+    assert(revealBlocked && "revealPassword before credentials unlock must throw UnauthorizedAccessException!");
+
+    bool copyBlocked = false;
+    try {
+        vault.copyPassword(0, credPass);
+    } catch (const UnauthorizedAccessException&) {
+        copyBlocked = true;
+    }
+    assert(copyBlocked && "copyPassword before credentials unlock must throw UnauthorizedAccessException!");
+
+    // 7. Credential Vault Unlock:
+    // Failed credential attempts: verify 3-attempt temporary lockout
+    int credAttempts = 0;
+    assert(!vault.unlockCredentials("WrongCred1", credAttempts));
+    assert(credAttempts == 2);
+    assert(!vault.unlockCredentials("WrongCred2", credAttempts));
+    assert(credAttempts == 1);
+    assert(!vault.unlockCredentials("WrongCred3", credAttempts));
+    assert(credAttempts == 0);
+
+    int lockoutRemaining = 0;
+    assert(vault.isCredentialsLockedOut(lockoutRemaining) && "Credential vault must be locked out after 3 failures!");
+    assert(lockoutRemaining > 0 && lockoutRemaining <= 30);
+
+    // While locked out, credential unlock is refused
+    assert(!vault.unlockCredentials(credPass, credAttempts) && "Unlock must be refused during lockout!");
+
+    // Reset lockout
+    vault.resetCredentialsAttempts();
+    assert(!vault.isCredentialsLockedOut(lockoutRemaining));
+
+    // Successful credential vault unlock transitions state to CredentialsUnlocked
+    bool credOk = vault.unlockCredentials(credPass, credAttempts);
+    assert(credOk && "Unlock with valid credential password must succeed!");
+    assert(vault.isCredentialsUnlocked());
+    assert(vault.getSessionState() == MasterVault::SessionState::CredentialsUnlocked);
+    assert(vault.getCredentialCount() == 2);
+
+    // 8. Domain authorization on sensitive operations:
+    // 8a. Password reveal
+    bool revealWrongPassBlocked = false;
+    try {
+        vault.revealPassword(0, "InvalidPassword");
+    } catch (const UnauthorizedAccessException&) {
+        revealWrongPassBlocked = true;
+    }
+    assert(revealWrongPassBlocked && "revealPassword with wrong password must throw UnauthorizedAccessException!");
+    std::string revealed = vault.revealPassword(0, credPass);
+    assert(revealed == "gh_secret_key_123" && "revealPassword with valid password must return plaintext secret!");
+
+    // 8b. Password copy
+    bool copyWrongPassBlocked = false;
+    try {
+        vault.copyPassword(0, "InvalidPassword");
+    } catch (const UnauthorizedAccessException&) {
+        copyWrongPassBlocked = true;
+    }
+    assert(copyWrongPassBlocked && "copyPassword with wrong password must throw UnauthorizedAccessException!");
+    std::string copied = vault.copyPassword(0, credPass);
+    assert(copied == "gh_secret_key_123" && "copyPassword with valid password must return plaintext secret!");
+
+    // 8c. Modifying stored secret requires credential password
+    auto editedWeb = std::make_shared<WebCredential>("GitHub Enterprise", "alice", "new_super_secret_gh", "updated notes", "https://github.com");
+    // Without password
+    assert(!vault.updateCredential(0, editedWeb) && "Updating secret without password must fail!");
+    // With wrong password
+    assert(!vault.updateCredential(0, editedWeb, "WrongPass") && "Updating secret with wrong password must fail!");
+    // With correct password
+    assert(vault.updateCredential(0, editedWeb, credPass) && "Updating secret with correct credPass must succeed!");
+    assert(vault.revealPassword(0, credPass) == "new_super_secret_gh");
+
+    // 8d. Modifying non-sensitive metadata only (password unchanged) does NOT require re-authentication
+    auto editedMetaOnly = std::make_shared<WebCredential>("GitHub Enterprise v2", "alice_new", "new_super_secret_gh", "notes v2", "https://github.com");
+    assert(vault.updateCredential(0, editedMetaOnly) && "Updating non-secret metadata must succeed without credential password!");
+    assert(vault.getCredential(0)->getService() == "GitHub Enterprise v2");
+    assert(vault.getCredential(0)->getUsername() == "alice_new");
+
+    // 8d-2. Modifying metadata with empty password field preserves existing secret without requiring re-auth
+    auto editedEmptyPass = std::make_shared<WebCredential>("GitHub Enterprise v3", "alice_v3", "", "notes v3", "https://github.com");
+    assert(vault.updateCredential(0, editedEmptyPass) && "Updating with empty password must succeed as metadata-only edit!");
+    assert(vault.getCredential(0)->getService() == "GitHub Enterprise v3");
+    assert(vault.getCredential(0)->getUsername() == "alice_v3");
+    assert(vault.revealPassword(0, credPass) == "new_super_secret_gh" && "Existing secret must NOT be overwritten by empty password!");
+
+    // 8d-3. Direct proxy updateCredential tests:
+    // Proxy update with empty password preserves existing secret
+    auto proxyMetaOnly = std::make_shared<WebCredential>("GitHub Enterprise v4", "alice_v4", "", "notes v4", "https://github.com");
+    assert(vault.getProxy().updateCredential(0, proxyMetaOnly) && "Proxy update with empty password must succeed as metadata-only edit!");
+    assert(vault.getProxy().revealPassword(0, credPass) == "new_super_secret_gh" && "Proxy update must preserve existing secret!");
+
+    // Proxy update with new secret password without password throws UnauthorizedAccessException
+    auto proxyNewPass = std::make_shared<WebCredential>("GitHub Enterprise v4", "alice_v4", "infiltrated_secret", "notes v4", "https://github.com");
+    bool proxyNoPassBlocked = false;
+    try {
+        vault.getProxy().updateCredential(0, proxyNewPass);
+    } catch (const UnauthorizedAccessException&) {
+        proxyNoPassBlocked = true;
+    }
+    assert(proxyNoPassBlocked && "Proxy updateCredential changing secret without password must throw UnauthorizedAccessException!");
+
+    // Proxy update with new secret password and wrong password throws UnauthorizedAccessException
+    bool proxyWrongPassBlocked = false;
+    try {
+        vault.getProxy().updateCredential(0, proxyNewPass, "WrongPassword");
+    } catch (const UnauthorizedAccessException&) {
+        proxyWrongPassBlocked = true;
+    }
+    assert(proxyWrongPassBlocked && "Proxy updateCredential changing secret with wrong password must throw UnauthorizedAccessException!");
+    assert(vault.getProxy().revealPassword(0, credPass) == "new_super_secret_gh" && "Secret must be preserved after rejected proxy update!");
+
+    // 8e. Deleting credential requires credential password verification and explicit confirmation
+    assert(!vault.deleteCredential(0) && "Direct deleteCredential without password must fail!");
+    assert(!vault.deleteCredential(0, "WrongPass") && "deleteCredential with wrong password must fail!");
+    assert(!vault.deleteCredential(0, credPass, false) && "deleteCredential without explicit confirmation must fail!");
+    assert(vault.getCredentialCount() == 2); // Cancellation preserved, no deletion occurred
+
+    // Direct proxy deletion access control checks
+    bool proxyDeleteUnconfirmedBlocked = false;
+    try {
+        vault.getProxy().deleteCredential(0, credPass, false);
+    } catch (const UnauthorizedAccessException&) {
+        proxyDeleteUnconfirmedBlocked = true;
+    }
+    assert(proxyDeleteUnconfirmedBlocked && "Proxy deleteCredential without confirmation must throw UnauthorizedAccessException!");
+
+    bool proxyDeleteWrongPassBlocked = false;
+    try {
+        vault.getProxy().deleteCredential(0, "WrongPass", true);
+    } catch (const UnauthorizedAccessException&) {
+        proxyDeleteWrongPassBlocked = true;
+    }
+    assert(proxyDeleteWrongPassBlocked && "Proxy deleteCredential with wrong password must throw UnauthorizedAccessException!");
+
+    bool proxyDeleteNoPassBlocked = false;
+    try {
+        vault.getProxy().deleteCredential(0);
+    } catch (const UnauthorizedAccessException&) {
+        proxyDeleteNoPassBlocked = true;
+    }
+    assert(proxyDeleteNoPassBlocked && "Proxy deleteCredential without password must throw UnauthorizedAccessException!");
+
+    assert(vault.deleteCredential(0, credPass, true) && "deleteCredential with valid credPass must succeed!");
+    assert(vault.getCredentialCount() == 1);
+
+    // 9. Inactivity timeout testing
+    vault.setInactivityTimeout(300);
+    assert(vault.getInactivityTimeout() == 300);
+    // Directly simulate timeout check with 1-second threshold
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    bool timedOut = vault.checkInactivityTimeout(1);
+    assert(timedOut && "Session should time out after simulated inactivity!");
+    assert(!vault.isCredentialsUnlocked() && "Credentials access must be revoked after timeout!");
+    assert(vault.getSessionState() == MasterVault::SessionState::MasterAuthenticated);
+    assert(vault.getCredentialCount() == 0 && "In-memory credential cache must be purged on timeout!");
+
+    // Re-unlocking after inactivity timeout
+    assert(vault.unlockCredentials(credPass, credAttempts));
+    assert(vault.getSessionState() == MasterVault::SessionState::CredentialsUnlocked);
+    assert(vault.getCredentialCount() == 1);
+
+    // 10. Explicit Lock and Logout
+    vault.lock();
+    assert(vault.getSessionState() == MasterVault::SessionState::Locked);
+    assert(!vault.isMasterUnlocked());
+    assert(!vault.isCredentialsUnlocked());
+    assert(vault.getCredentialCount() == 0);
+
+    // Cleanup
+    fs::remove(testVaultPath);
+    std::cout << "  --> PASS: Phase 2 & 3 authorization refactor, session states, and security policies verified.\n\n";
+}
+
+void testClipboardAndGeneratorWorkflow() {
+    std::cout << "[Test 14] Password Generator, Copy Action & Clipboard Utilities\n";
+
+    // 1. TerminalUtils::copyToClipboard empty string check
+    assert(!TerminalUtils::copyToClipboard("") && "Copying empty string must fail and return false!");
+
+    // 2. Simulated clipboard hook success
+    std::string captured;
+    TerminalUtils::setClipboardHookForTesting([&](const std::string& text) {
+        captured = text;
+        return true;
+    });
+
+    std::string testSecret = "SuperGeneratedPass#2026";
+    bool copyOk = TerminalUtils::copyToClipboard(testSecret);
+    assert(copyOk && "copyToClipboard must succeed when clipboard transport succeeds!");
+    assert(captured == testSecret && "Captured clipboard text must match input secret!");
+
+    // 3. Simulated clipboard failure handling (must not report success on failure)
+    TerminalUtils::setClipboardHookForTesting([](const std::string&) {
+        return false; // simulate failure
+    });
+    bool copyFailed = TerminalUtils::copyToClipboard(testSecret);
+    assert(!copyFailed && "copyToClipboard must return false when transport fails!");
+
+    // Reset hook
+    TerminalUtils::setClipboardHookForTesting(nullptr);
+
+    // 4. Actual Clipboard Integration Test (distinguishing live integration from simulated unit test)
+    std::string livePayload = "VaultSync_Live_Clipboard_Pass#998877";
+    bool actualCopySuccess = TerminalUtils::copyToClipboard(livePayload);
+    if (actualCopySuccess) {
+        // Verify roundtrip readback from the actual system clipboard
+        std::string actualReadBack = TerminalUtils::getClipboardText();
+        assert(actualReadBack == livePayload && "Actual system clipboard readback must match payload exactly!");
+        std::cout << "  --> Verified LIVE system clipboard roundtrip via native desktop utility.\n";
+    } else {
+        std::cout << "  --> Notice: Headless environment without native clipboard utility correctly returned false.\n";
+    }
+
+    // 5. Password Generator works independently without unlocking Credential Vault
+    MasterVault lockedVault;
+    assert(!lockedVault.isCredentialsUnlocked());
+
+    PasswordOptions opts;
+    opts.length = 24;
+    opts.uppercase = true;
+    opts.lowercase = true;
+    opts.digits = true;
+    opts.symbols = true;
+
+    std::string gen1 = PasswordGenerator::generate(opts);
+    assert(gen1.length() == 24);
+    assert(gen1.find_first_of("0123456789") != std::string::npos);
+    assert(gen1.find_first_of("!@#$%^&*()-_=+[]{}|;:,.<>?") != std::string::npos);
+
+    // 6. Generated password can be copied without credential vault unlock
+    TerminalUtils::setClipboardHookForTesting([&](const std::string& text) {
+        captured = text;
+        return true;
+    });
+    bool genCopyOk = TerminalUtils::copyToClipboard(gen1);
+    assert(genCopyOk && "Generated password must be copyable without credential unlock!");
+    assert(captured == gen1);
+    TerminalUtils::setClipboardHookForTesting(nullptr);
+
+    // 7. Password generator length bounds
+    PasswordOptions shortOpts;
+    shortOpts.length = 8;
+    std::string shortGen = PasswordGenerator::generate(shortOpts);
+    assert(shortGen.length() == 8);
+
+    PasswordOptions longOpts;
+    longOpts.length = 128;
+    std::string longGen = PasswordGenerator::generate(longOpts);
+    assert(longGen.length() == 128);
+
+    std::cout << "  --> PASS: Password generator, clipboard integration, and error handling verified.\n\n";
+}
+
 int main() {
     std::cout << "=====================================================\n";
     std::cout << "  VaultSync: Cryptographic Tests (XOR & AES-256-GCM)  \n";
@@ -866,6 +1249,8 @@ int main() {
     testAESCipherRoundtripAndRandomization();
     testAESCipherAuthenticationAndTamperDetection();
     testMasterVaultAESAndProxyIntegration();
+    testPhase2And3AuthorizationAndFlow();
+    testClipboardAndGeneratorWorkflow();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;

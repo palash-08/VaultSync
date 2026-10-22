@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <chrono>
 
 #include "credentials/Credential.h"
 #include "storage/FileStorage.h"
@@ -11,25 +12,17 @@
 #include "storage/Vault.h"
 #include "vault/VaultProxy.h"
 
-/**
- * @brief MasterVault coordinates two-tier authentication, user identification, and access control.
- *
- * Architecture Overview:
- * 1. Two-Tier Authentication:
- *    - Master Vault Password: Logs the user in and establishes the active session.
- *    - Credential Vault Password: Configured on first use, derives a 256-bit encryption key
- *      used by AES-256-GCM to decrypt the stored credentials.
- *
- * 2. Design Patterns Applied:
- *    - Repository Pattern: Manages credentials in memory using Repository<Credential>.
- *    - Proxy Pattern: VaultProxy guards access to the underlying Vault and enforces authorization.
- *    - Strategy Pattern: Cryptography uses ICipher interface, defaulting to AESCipher (AES-256-GCM).
- *
- * 3. Polymorphism:
- *    - Stores and serializes polymorphic credentials (WebCredential, WiFiCredential, SSHCredential, etc.).
- *    - Retains full backward compatibility with legacy value-based Credential objects.
- */
 class MasterVault {
+public:
+    /**
+     * @brief Represents the three explicit session states of VaultSync.
+     */
+    enum class SessionState {
+        Locked,                 /**< Fully locked: no session established, memory purged. */
+        MasterAuthenticated,    /**< Tier 1: Master Vault logged in; dashboard accessible; encrypted payload remains locked. */
+        CredentialsUnlocked     /**< Tier 2: Credential Vault unlocked; credentials decrypted in RAM. */
+    };
+
 private:
     std::string vaultPath;
     std::string username;
@@ -47,6 +40,12 @@ private:
     bool credUnlocked;
     int credFailedAttempts;
     bool credLockedOut;
+
+    // Session state and activity tracking
+    SessionState sessionState;
+    std::chrono::steady_clock::time_point lastActivityTime;
+    int inactivityTimeoutSeconds;
+    std::chrono::steady_clock::time_point credLockoutEnd;
 
     // Cryptography and persistence
     std::shared_ptr<ICipher> cipher;
@@ -184,7 +183,45 @@ public:
     bool isCredentialsUnlocked() const;
 
     /**
-     * @brief Resets the Credential Vault failed attempts counter.
+     * @brief Returns the current explicit session state.
+     * @return Locked, MasterAuthenticated, or CredentialsUnlocked.
+     */
+    SessionState getSessionState() const;
+
+    /**
+     * @brief Records user activity timestamp for inactivity timeout tracking.
+     */
+    void recordActivity();
+
+    /**
+     * @brief Checks if session has been inactive past the specified timeout.
+     * If timeout elapsed, automatically revokes Tier 2 credential access (or session).
+     * @param timeoutSeconds Inactivity timeout threshold in seconds (0 = uses configured default).
+     * @return True if session timed out and was locked; false otherwise.
+     */
+    bool checkInactivityTimeout(int timeoutSeconds = 0);
+
+    /**
+     * @brief Sets the default inactivity timeout in seconds.
+     * @param seconds Timeout in seconds (0 = disabled).
+     */
+    void setInactivityTimeout(int seconds);
+
+    /**
+     * @brief Gets the configured inactivity timeout in seconds.
+     * @return Configured timeout in seconds.
+     */
+    int getInactivityTimeout() const;
+
+    /**
+     * @brief Checks if Credential Vault attempts are currently locked out.
+     * @param remainingSeconds Output parameter receiving remaining lockout time in seconds.
+     * @return True if locked out; false otherwise.
+     */
+    bool isCredentialsLockedOut(int& remainingSeconds) const;
+
+    /**
+     * @brief Resets the Credential Vault failed attempts counter and lockout timer.
      */
     void resetCredentialsAttempts();
 
@@ -202,11 +239,32 @@ public:
 
     /**
      * @brief Updates an existing polymorphic credential at the specified index and saves to disk.
+     * Modifying stored secrets requires credential password verification.
      * @param index Zero-based index of the credential to update.
      * @param updated Replacement credential object.
+     * @param credPassword Plaintext credential vault password authorizing secret changes.
      * @return True if updated and saved successfully; false otherwise.
      */
-    bool updateCredential(size_t index, std::shared_ptr<Credential> updated);
+    bool updateCredential(size_t index, std::shared_ptr<Credential> updated,
+                          const std::string& credPassword = "");
+
+    /**
+     * @brief Reveals the plaintext secret password for a credential after verifying credential password.
+     * @param index Zero-based index of the credential.
+     * @param credPassword Plaintext credential vault password authorizing reveal.
+     * @return Plaintext secret password string.
+     * @throws UnauthorizedAccessException If not authenticated or credential password invalid.
+     */
+    std::string revealPassword(size_t index, const std::string& credPassword);
+
+    /**
+     * @brief Copies the plaintext secret password after verifying credential password.
+     * @param index Zero-based index of the credential.
+     * @param credPassword Plaintext credential vault password authorizing copy.
+     * @return Plaintext secret password string.
+     * @throws UnauthorizedAccessException If not authenticated or credential password invalid.
+     */
+    std::string copyPassword(size_t index, const std::string& credPassword);
 
     /**
      * @brief Retrieves a specific polymorphic credential by index.
@@ -239,9 +297,11 @@ public:
      * @brief Updates an existing credential at the specified index and persists to disk.
      * @param index Zero-based index of the credential.
      * @param updated Updated credential object.
+     * @param credPassword Plaintext credential vault password authorizing secret changes.
      * @return True if updated and saved successfully; false otherwise.
      */
-    bool updateCredential(size_t index, const Credential& updated);
+    bool updateCredential(size_t index, const Credential& updated,
+                          const std::string& credPassword = "");
 
     /**
      * @brief Verifies whether the provided password matches the Credential Vault Password.
@@ -251,7 +311,18 @@ public:
     bool verifyCredentialPassword(const std::string& credPassword) const;
 
     /**
-     * @brief Removes a credential at the specified index and persists the encrypted vault to disk.
+     * @brief Removes a credential at the specified index after credential password verification
+     *        and explicit confirmation.
+     * @param index Zero-based index of the credential to remove.
+     * @param credPassword Plaintext credential password authorizing the deletion.
+     * @param confirmed Explicit confirmation flag (defaults to true; false rejects deletion).
+     * @return True if removed and saved successfully; false otherwise.
+     */
+    bool deleteCredential(size_t index, const std::string& credPassword, bool confirmed = true);
+
+    /**
+     * @brief Removes a credential at the specified index.
+     * @note Direct unauthenticated calls without password will be rejected.
      * @param index Zero-based index of the credential to remove.
      * @return True if removed and saved successfully; false otherwise.
      */
@@ -293,5 +364,7 @@ public:
      */
     const std::string& getUsername() const;
 };
+
+using SessionState = MasterVault::SessionState;
 
 #endif // MASTER_VAULT_H

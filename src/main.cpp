@@ -624,13 +624,14 @@ void handleEditCredential(MasterVault& vault, size_t index) {
 
     // Clone credential to work on a temporary editable copy
     std::shared_ptr<Credential> working(current->clone());
+    working->setPassword(""); // Clear password so stored secret is not held in edit form memory
 
     auto screen = ScreenInteractive::Fullscreen();
     auto exit = screen.ExitLoopClosure();
 
     std::string service = working->getService();
     std::string username = working->getUsername();
-    std::string password = working->getPassword();
+    std::string newPassword;
     std::string notes = working->getNotes();
 
     std::string url;
@@ -656,18 +657,26 @@ void handleEditCredential(MasterVault& vault, size_t index) {
     Component inputSec;
     Component inputHost;
     Component inputPort;
+    Component inputCredAuth;
 
+    std::string credAuthPassword;
     std::string errorMsg;
 
     auto saveAction = [&] {
-        if (service.empty() || password.empty()) {
-            errorMsg = "Service and password cannot be empty.";
+        if (service.empty()) {
+            errorMsg = "Service name cannot be empty.";
+            return;
+        }
+
+        bool secretChanged = !newPassword.empty();
+        if (secretChanged && credAuthPassword.empty()) {
+            errorMsg = "Modifying the secret password requires entering your Credential Vault password.";
             return;
         }
 
         working->setService(service);
         working->setUsername(username);
-        working->setPassword(password);
+        working->setPassword(newPassword); // Empty password signals domain layer to keep current password
         working->setNotes(notes);
 
         if (auto web = std::dynamic_pointer_cast<WebCredential>(working)) {
@@ -680,10 +689,14 @@ void handleEditCredential(MasterVault& vault, size_t index) {
             try { ssh->setPort(std::stoi(portStr)); } catch (...) {}
         }
 
-        if (vault.updateCredential(index, working)) {
+        if (vault.updateCredential(index, working, credAuthPassword)) {
             exit();
         } else {
-            errorMsg = "Failed to update credential.";
+            if (secretChanged) {
+                errorMsg = "Invalid Credential Vault password. Secret modification rejected.";
+            } else {
+                errorMsg = "Failed to update credential.";
+            }
         }
     };
 
@@ -693,7 +706,7 @@ void handleEditCredential(MasterVault& vault, size_t index) {
     inputUser = Input(&username, "Username", Theme::inputOption(false, [&] {
         if (inputPass) inputPass->TakeFocus();
     }));
-    inputPass = Input(&password, "Password", Theme::inputOption(false, [&] {
+    inputPass = Input(&newPassword, "Leave blank to keep current password", Theme::inputOption(true, [&] {
         if (inputNotes) inputNotes->TakeFocus();
     }));
     inputNotes = Input(&notes, "Notes", Theme::inputOption(false, [&] {
@@ -704,23 +717,30 @@ void handleEditCredential(MasterVault& vault, size_t index) {
         } else if (working->getType() == "ssh" && inputHost) {
             inputHost->TakeFocus();
         } else {
-            saveAction();
+            if (inputCredAuth) inputCredAuth->TakeFocus();
+            else saveAction();
         }
     }));
 
     inputUrl = Input(&url, "URL", Theme::inputOption(false, [&] {
-        saveAction();
+        if (inputCredAuth) inputCredAuth->TakeFocus();
+        else saveAction();
     }));
     inputSsid = Input(&ssid, "SSID", Theme::inputOption(false, [&] {
         if (inputSec) inputSec->TakeFocus();
     }));
     inputSec = Input(&secType, "Security", Theme::inputOption(false, [&] {
-        saveAction();
+        if (inputCredAuth) inputCredAuth->TakeFocus();
+        else saveAction();
     }));
     inputHost = Input(&host, "Host", Theme::inputOption(false, [&] {
         if (inputPort) inputPort->TakeFocus();
     }));
     inputPort = Input(&portStr, "Port", Theme::inputOption(false, [&] {
+        if (inputCredAuth) inputCredAuth->TakeFocus();
+        else saveAction();
+    }));
+    inputCredAuth = Input(&credAuthPassword, "Required only if password is changed", Theme::inputOption(true, [&] {
         saveAction();
     }));
 
@@ -744,6 +764,7 @@ void handleEditCredential(MasterVault& vault, size_t index) {
         formComponents.push_back(inputPort);
     }
 
+    formComponents.push_back(inputCredAuth);
     formComponents.push_back(Container::Horizontal({ btnSave, btnCancel }));
 
     auto container = Container::Vertical(std::move(formComponents));
@@ -752,7 +773,7 @@ void handleEditCredential(MasterVault& vault, size_t index) {
         Elements form;
         form.push_back(hbox({ text(" Service  : ") | bold, inputService->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
         form.push_back(hbox({ text(" Username : ") | bold, inputUser->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
-        form.push_back(hbox({ text(" Password : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Primary));
+        form.push_back(hbox({ text(" New Pass : ") | bold, inputPass->Render() | flex_grow }) | borderRounded | color(Theme::Primary));
         form.push_back(hbox({ text(" Notes    : ") | bold, inputNotes->Render() | flex_grow }) | borderRounded | color(Theme::Subtle));
 
         if (working->getType() == "web") {
@@ -765,6 +786,9 @@ void handleEditCredential(MasterVault& vault, size_t index) {
             form.push_back(hbox({ text(" Port     : ") | bold, inputPort->Render() | flex_grow }) | borderRounded | color(Theme::Secondary));
         }
 
+        form.push_back(hbox({ text(" Auth Pass: ") | bold | color(Theme::Warning), inputCredAuth->Render() | flex_grow }) | borderRounded | color(Theme::Warning));
+        form.push_back(text(" (Credential Vault password required only if modifying the secret password) ") | dim | color(Theme::Muted));
+
         if (!errorMsg.empty()) {
             form.push_back(text(errorMsg) | bold | color(Theme::Danger));
         }
@@ -775,12 +799,12 @@ void handleEditCredential(MasterVault& vault, size_t index) {
                 filler(),
                 vbox({
                     text(" Edit Credential — " + current->getService()) | bold | color(Theme::Primary),
-                    text(" Password is intentionally visible during editing. ") | dim | color(Theme::Muted),
+                    text(" Non-secret metadata can be saved without re-authentication. ") | dim | color(Theme::Muted),
                     separator() | color(Theme::Subtle),
                     vbox(std::move(form)),
                     separator() | color(Theme::Subtle),
                     hbox({ btnSave->Render(), text("  "), btnCancel->Render() }) | center,
-                }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Primary),
+                }) | size(WIDTH, EQUAL, 68) | borderRounded | color(Theme::Primary),
                 filler(),
             }),
             filler(),
@@ -788,6 +812,140 @@ void handleEditCredential(MasterVault& vault, size_t index) {
     });
 
     screen.Loop(renderer);
+}
+
+/**
+ * @brief Modal dialog to reveal a stored secret password with Credential Vault authentication.
+ */
+bool promptRevealPassword(MasterVault& vault, size_t index, std::string& outPassword) {
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+    std::string authPassword;
+    std::string errorMsg;
+    bool success = false;
+
+    Component inputAuth;
+
+    auto revealAction = [&] {
+        if (authPassword.empty()) {
+            errorMsg = "Password cannot be empty.";
+            return;
+        }
+
+        try {
+            outPassword = vault.revealPassword(index, authPassword);
+            success = true;
+            exit();
+        } catch (const UnauthorizedAccessException&) {
+            errorMsg = "Invalid Credential Vault password.";
+            authPassword.clear();
+        } catch (const std::exception& e) {
+            errorMsg = e.what();
+            authPassword.clear();
+        }
+    };
+
+    inputAuth = Input(&authPassword, "Credential vault password", Theme::inputOption(true, [&] {
+        revealAction();
+    }));
+
+    auto btnConfirm = Button("Reveal Secret", revealAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputAuth,
+        Container::Horizontal({ btnConfirm, btnCancel }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Reveal Stored Secret ") | bold | color(Theme::Warning),
+                    text(" Enter your Credential Vault password to decrypt and reveal the secret. ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({ text(" Vault Password : ") | bold, inputAuth->Render() | flex_grow }) | borderRounded | color(Theme::Warning),
+                    text(errorMsg) | color(Theme::Danger),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnConfirm->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 62) | borderRounded | color(Theme::Warning),
+                filler(),
+            }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+    return success;
+}
+
+/**
+ * @brief Modal dialog to authorize copying a stored secret password with Credential Vault authentication.
+ */
+bool promptCopyPassword(MasterVault& vault, size_t index, std::string& outPassword) {
+    auto screen = ScreenInteractive::Fullscreen();
+    auto exit = screen.ExitLoopClosure();
+    std::string authPassword;
+    std::string errorMsg;
+    bool success = false;
+
+    Component inputAuth;
+
+    auto copyAction = [&] {
+        if (authPassword.empty()) {
+            errorMsg = "Password cannot be empty.";
+            return;
+        }
+
+        try {
+            outPassword = vault.copyPassword(index, authPassword);
+            success = true;
+            exit();
+        } catch (const UnauthorizedAccessException&) {
+            errorMsg = "Invalid Credential Vault password.";
+            authPassword.clear();
+        } catch (const std::exception& e) {
+            errorMsg = e.what();
+            authPassword.clear();
+        }
+    };
+
+    inputAuth = Input(&authPassword, "Credential vault password", Theme::inputOption(true, [&] {
+        copyAction();
+    }));
+
+    auto btnConfirm = Button("Authorize Copy", copyAction, Theme::buttonOption(true));
+    auto btnCancel = Button("Cancel", [&] { exit(); }, Theme::buttonOption(false));
+
+    auto container = Container::Vertical({
+        inputAuth,
+        Container::Horizontal({ btnConfirm, btnCancel }),
+    });
+
+    auto renderer = Renderer(container, [&] {
+        return vbox({
+            filler(),
+            hbox({
+                filler(),
+                vbox({
+                    text(" Copy Stored Secret ") | bold | color(Theme::Primary),
+                    text(" Enter your Credential Vault password to authorize copying. ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({ text(" Vault Password : ") | bold, inputAuth->Render() | flex_grow }) | borderRounded | color(Theme::Primary),
+                    text(errorMsg) | color(Theme::Danger),
+                    separator() | color(Theme::Subtle),
+                    hbox({ btnConfirm->Render(), text("  "), btnCancel->Render() }) | center,
+                }) | size(WIDTH, EQUAL, 62) | borderRounded | color(Theme::Primary),
+                filler(),
+            }),
+            filler(),
+        });
+    });
+
+    screen.Loop(renderer);
+    return success;
 }
 
 /**
@@ -813,15 +971,10 @@ bool handleDeleteCredential(MasterVault& vault, size_t index) {
             return;
         }
 
-        if (vault.verifyCredentialPassword(authPassword)) {
-            if (vault.deleteCredential(index)) {
-                deleted = true;
-                exit();
-                return;
-            } else {
-                errorMsg = "Failed to delete credential from storage.";
-                return;
-            }
+        if (vault.deleteCredential(index, authPassword)) {
+            deleted = true;
+            exit();
+            return;
         }
 
         attempts--;
@@ -879,10 +1032,7 @@ bool handleDeleteCredential(MasterVault& vault, size_t index) {
  * @brief Coordinates the main interactive Master Session menu using an OpenCode split-pane layout.
  */
 void runMasterVaultSession(MasterVault& vault) {
-    if (!ensureCredentialVaultUnlocked(vault)) {
-        vault.lock();
-        return;
-    }
+    vault.setInactivityTimeout(300); // 5 minutes inactivity timeout
 
     auto screen = ScreenInteractive::Fullscreen();
     auto exit = screen.ExitLoopClosure();
@@ -901,10 +1051,17 @@ void runMasterVaultSession(MasterVault& vault) {
     int selectedCredIndex = 0;
     int previousCredIndex = -1; // Track selection changes to auto-hide password
     bool showPassword = false;
+    std::string revealedPassword;
+    std::string copyStatusMessage;
     std::vector<std::string> credentialLabels;
 
     auto refreshCredentialLabels = [&] {
         credentialLabels.clear();
+        if (!vault.isCredentialsUnlocked()) {
+            credentialLabels.push_back("(Credential Vault is locked)");
+            selectedCredIndex = 0;
+            return;
+        }
         auto creds = vault.getPolymorphicCredentials();
         for (size_t i = 0; i < creds.size(); ++i) {
             std::string badge = getTypeBadgeStr(creds[i]);
@@ -920,6 +1077,16 @@ void runMasterVaultSession(MasterVault& vault) {
 
     refreshCredentialLabels();
 
+    auto tryUnlockCredentialVault = [&] {
+        if (ensureCredentialVaultUnlocked(vault)) {
+            refreshCredentialLabels();
+        }
+    };
+
+    auto btnUnlockTab0 = Button("Unlock Credential Vault", tryUnlockCredentialVault, Theme::buttonOption(true));
+    auto btnUnlockTab1 = Button("Unlock Credential Vault", tryUnlockCredentialVault, Theme::buttonOption(true));
+    auto btnUnlockTab3 = Button("Unlock Credential Vault", tryUnlockCredentialVault, Theme::buttonOption(true));
+
     auto credMenu = Menu(&credentialLabels, &selectedCredIndex, Theme::menuOption());
 
     auto btnAddCred = Button("+ Add Credential", [&] {
@@ -929,13 +1096,42 @@ void runMasterVaultSession(MasterVault& vault) {
             if (!creds.empty()) {
                 selectedCredIndex = static_cast<int>(creds.size()) - 1;
                 showPassword = false;
+                revealedPassword.clear();
                 previousCredIndex = selectedCredIndex;
             }
         }
     }, Theme::buttonOption(true));
 
     auto btnToggleShow = Button("Show/Hide Password", [&] {
-        showPassword = !showPassword;
+        auto creds = vault.getPolymorphicCredentials();
+        if (creds.empty() || selectedCredIndex < 0 || selectedCredIndex >= static_cast<int>(creds.size())) {
+            return;
+        }
+        if (showPassword) {
+            showPassword = false;
+            revealedPassword.clear();
+        } else {
+            std::string pass;
+            if (promptRevealPassword(vault, selectedCredIndex, pass)) {
+                revealedPassword = pass;
+                showPassword = true;
+            }
+        }
+    }, Theme::buttonOption(false));
+
+    auto btnCopyPass = Button("Copy Password", [&] {
+        auto creds = vault.getPolymorphicCredentials();
+        if (creds.empty() || selectedCredIndex < 0 || selectedCredIndex >= static_cast<int>(creds.size())) {
+            return;
+        }
+        std::string pass;
+        if (promptCopyPassword(vault, selectedCredIndex, pass)) {
+            if (TerminalUtils::copyToClipboard(pass)) {
+                copyStatusMessage = "✓ Copied password to clipboard for \"" + creds[selectedCredIndex]->getService() + "\"";
+            } else {
+                copyStatusMessage = "✗ Failed to copy password to clipboard.";
+            }
+        }
     }, Theme::buttonOption(false));
 
     auto btnEdit = Button("Edit Credential", [&] {
@@ -952,6 +1148,7 @@ void runMasterVaultSession(MasterVault& vault) {
             if (handleDeleteCredential(vault, selectedCredIndex)) {
                 refreshCredentialLabels();
                 showPassword = false;
+                revealedPassword.clear();
                 previousCredIndex = selectedCredIndex;
             }
         }
@@ -969,6 +1166,10 @@ void runMasterVaultSession(MasterVault& vault) {
         searchLabels.clear();
         currentSearchResults.clear();
         selectedSearchIndex = 0;
+        if (!vault.isCredentialsUnlocked()) {
+            searchLabels.push_back("(Unlock Credential Vault to search)");
+            return;
+        }
         if (!searchQuery.empty()) {
             currentSearchResults = vault.search(searchQuery);
             for (size_t i = 0; i < currentSearchResults.size(); ++i) {
@@ -998,6 +1199,7 @@ void runMasterVaultSession(MasterVault& vault) {
                 if (allCreds[i] == target) {
                     selectedCredIndex = static_cast<int>(i);
                     showPassword = false;
+                    revealedPassword.clear();
                     previousCredIndex = selectedCredIndex;
                     selectedTab = 0;
                     break;
@@ -1012,6 +1214,8 @@ void runMasterVaultSession(MasterVault& vault) {
     std::string generatedPassword;
     float genEntropyRatio = 0.0f;
     std::string genFeedback = "Click Generate to create a secure password";
+    std::string genCopyMessage;
+    Color genCopyColor = Theme::Success;
 
     Component inputGenLen;
 
@@ -1031,11 +1235,27 @@ void runMasterVaultSession(MasterVault& vault) {
 
         try {
             generatedPassword = PasswordGenerator::generate(opts);
+            genCopyMessage.clear();
             auto result = PasswordStrength::analyze(generatedPassword);
             genEntropyRatio = std::min(1.0f, static_cast<float>(result.entropy) / 100.0f);
             genFeedback = "Entropy: " + std::to_string(static_cast<int>(result.entropy)) + " bits — " + result.feedback;
         } catch (const std::exception& e) {
             genFeedback = std::string("Error: ") + e.what();
+        }
+    };
+
+    auto copyGeneratedAction = [&] {
+        if (generatedPassword.empty()) {
+            genCopyMessage = "Generate a password first before copying.";
+            genCopyColor = Theme::Warning;
+            return;
+        }
+        if (TerminalUtils::copyToClipboard(generatedPassword)) {
+            genCopyMessage = "✓ Copied generated password to clipboard!";
+            genCopyColor = Theme::Success;
+        } else {
+            genCopyMessage = "✗ Failed to copy to clipboard.";
+            genCopyColor = Theme::Danger;
         }
     };
 
@@ -1049,6 +1269,7 @@ void runMasterVaultSession(MasterVault& vault) {
     auto checkSymbols = Checkbox("Symbols (!@#$)", &optSymbols);
 
     auto btnGenerate = Button("Generate Random Password", generateAction, Theme::buttonOption(true));
+    auto btnCopyGenerated = Button("Copy Password", copyGeneratedAction, Theme::buttonOption(false));
 
     std::string evalInput;
     std::string evalScoreStr = "--";
@@ -1073,29 +1294,51 @@ void runMasterVaultSession(MasterVault& vault) {
     auto btnEval = Button("Evaluate Strength", evalAction, Theme::buttonOption(false));
 
     // Tab-isolated component containers
-    auto tab0Container = Container::Horizontal({
+    auto tab0Unlocked = Container::Horizontal({
         Container::Vertical({ credMenu, btnAddCred }),
-        Container::Vertical({ btnToggleShow, btnEdit, btnDelete }),
+        Container::Vertical({ btnToggleShow, btnCopyPass, btnEdit, btnDelete }),
     });
+    int tab0SubIdx = 0;
+    auto tab0SubContainer = Container::Tab({
+        Container::Vertical({ btnUnlockTab0 }),
+        tab0Unlocked,
+    }, &tab0SubIdx);
 
-    auto tab1Container = Container::Vertical({
+    auto tab1Unlocked = Container::Vertical({
         Container::Horizontal({ inputSearch, btnRunSearch }),
         searchMenu,
     });
+    int tab1SubIdx = 0;
+    auto tab1SubContainer = Container::Tab({
+        Container::Vertical({ btnUnlockTab1 }),
+        tab1Unlocked,
+    }, &tab1SubIdx);
 
     auto tab2Container = Container::Horizontal({
-        Container::Vertical({ inputGenLen, checkUpper, checkLower, checkDigits, checkSymbols, btnGenerate }),
+        Container::Vertical({
+            inputGenLen,
+            checkUpper,
+            checkLower,
+            checkDigits,
+            checkSymbols,
+            Container::Horizontal({ btnGenerate, btnCopyGenerated })
+        }),
         Container::Vertical({ inputEval, btnEval }),
     });
 
-    auto tab3Container = Container::Vertical({}); // Tab 3: Security Audit is display-only
+    int tab3SubIdx = 0;
+    auto tab3SubContainer = Container::Tab({
+        Container::Vertical({ btnUnlockTab3 }),
+        Container::Vertical({}),
+    }, &tab3SubIdx);
+
     auto tab4Container = Container::Vertical({}); // Tab 4: Lock & Logout
 
     auto tabContainer = Container::Tab({
-        tab0Container,
-        tab1Container,
+        tab0SubContainer,
+        tab1SubContainer,
         tab2Container,
-        tab3Container,
+        tab3SubContainer,
         tab4Container,
     }, &selectedTab);
 
@@ -1106,6 +1349,20 @@ void runMasterVaultSession(MasterVault& vault) {
     });
 
     auto renderer = Renderer(mainContainer, [&] {
+        // Record user activity
+        vault.recordActivity();
+
+        // Inactivity timeout check
+        if (vault.checkInactivityTimeout()) {
+            showPassword = false;
+            revealedPassword.clear();
+            refreshCredentialLabels();
+        }
+
+        tab0SubIdx = vault.isCredentialsUnlocked() ? 1 : 0;
+        tab1SubIdx = vault.isCredentialsUnlocked() ? 1 : 0;
+        tab3SubIdx = vault.isCredentialsUnlocked() ? 1 : 0;
+
         // Handle Tab 4: Lock & Logout
         if (selectedTab == 4) {
             vault.lock();
@@ -1118,7 +1375,8 @@ void runMasterVaultSession(MasterVault& vault) {
             text(" VaultSync ") | bold | color(Theme::Primary) | bgcolor(Theme::CardBg),
             text(" ❯ ") | color(Theme::Subtle),
             text(vault.getUsername()) | bold | color(Theme::TextBright),
-            text(" (AES-256-GCM Unlocked) ") | color(Theme::Success),
+            text(vault.isCredentialsUnlocked() ? " (Credentials Unlocked) " : " (Credentials Locked) ")
+                | color(vault.isCredentialsUnlocked() ? Theme::Success : Theme::Warning),
             filler(),
             tabMenu->Render(),
         }) | borderRounded | color(Theme::Subtle);
@@ -1127,87 +1385,129 @@ void runMasterVaultSession(MasterVault& vault) {
 
         if (selectedTab == 0) {
             // === TAB 0: Credentials Split View ===
-            auto creds = vault.getPolymorphicCredentials();
+            if (!vault.isCredentialsUnlocked()) {
+                auto lockedCard = vbox({
+                    text(" 🔒 Credential Vault is Locked ") | bold | color(Theme::Warning) | center,
+                    separator() | color(Theme::Subtle),
+                    text(" Stored credentials are encrypted with AES-256-GCM. ") | dim | color(Theme::Muted) | center,
+                    text(" Enter your credential vault password to decrypt, view, and manage accounts. ") | color(Theme::TextBright) | center,
+                    separator() | color(Theme::Subtle),
+                    btnUnlockTab0->Render() | center,
+                }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Warning);
 
-            // Auto-hide password when selecting a different credential
-            if (selectedCredIndex != previousCredIndex) {
-                showPassword = false;
-                previousCredIndex = selectedCredIndex;
-            }
-
-            // Left Pane: List
-            auto leftPane = vbox({
-                hbox({ text(" Credentials ") | bold | color(Theme::Primary), filler(), text(std::to_string(creds.size()) + " total") | dim }),
-                separator() | color(Theme::Subtle),
-                credMenu->Render() | flex_grow,
-                separator() | color(Theme::Subtle),
-                btnAddCred->Render() | center,
-            }) | size(WIDTH, EQUAL, 38) | borderRounded | color(Theme::Subtle);
-
-            // Right Pane: Detail Card
-            Element rightPane;
-            if (creds.empty() || selectedCredIndex < 0 || selectedCredIndex >= static_cast<int>(creds.size())) {
-                rightPane = vbox({
+                bodyContent = vbox({
                     filler(),
-                    text(" No Credential Selected ") | bold | color(Theme::Muted) | center,
-                    text(" Choose a credential from the list or add a new one. ") | dim | color(Theme::Subtle) | center,
+                    hbox({ filler(), lockedCard, filler() }),
                     filler(),
-                }) | flex_grow | borderRounded | color(Theme::Subtle);
+                });
             } else {
-                const auto& active = creds[selectedCredIndex];
-                std::string displayPass = showPassword ? active->getPassword() : std::string(active->getPassword().size(), '*');
+                auto creds = vault.getPolymorphicCredentials();
 
-                Elements detailRows;
-                detailRows.push_back(hbox({ text(" Service   : ") | bold | color(Theme::TextBright), text(active->getService()) | bold | color(Theme::Primary) }));
-                detailRows.push_back(hbox({ text(" Type      : ") | bold | color(Theme::TextBright), Theme::badge(active->getType()), text(" " + active->getType()) | dim }));
-                detailRows.push_back(hbox({ text(" Username  : ") | bold | color(Theme::TextBright), text(active->getUsername().empty() ? "(none)" : active->getUsername()) | color(Theme::TextBright) }));
-                detailRows.push_back(hbox({ text(" Password  : ") | bold | color(Theme::TextBright), text(displayPass) | bold | color(showPassword ? Theme::Warning : Theme::Muted) }));
-                detailRows.push_back(hbox({ text(" Notes     : ") | bold | color(Theme::TextBright), text(active->getNotes().empty() ? "(none)" : active->getNotes()) | color(Theme::Muted) }));
-
-                if (auto web = std::dynamic_pointer_cast<WebCredential>(active)) {
-                    detailRows.push_back(hbox({ text(" URL       : ") | bold | color(Theme::Primary), text(web->getUrl()) | color(Theme::Primary) }));
-                } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(active)) {
-                    detailRows.push_back(hbox({ text(" SSID      : ") | bold | color(Theme::Success), text(wifi->getSsid()) | color(Theme::Success) }));
-                    detailRows.push_back(hbox({ text(" Protocol  : ") | bold | color(Theme::Success), text(wifi->getSecurityType()) | color(Theme::Success) }));
-                } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(active)) {
-                    detailRows.push_back(hbox({ text(" Host      : ") | bold | color(Theme::Secondary), text(ssh->getHost()) | color(Theme::Secondary) }));
-                    detailRows.push_back(hbox({ text(" Port      : ") | bold | color(Theme::Secondary), text(std::to_string(ssh->getPort())) | color(Theme::Secondary) }));
+                // Auto-hide password when selecting a different credential
+                if (selectedCredIndex != previousCredIndex) {
+                    showPassword = false;
+                    revealedPassword.clear();
+                    previousCredIndex = selectedCredIndex;
                 }
 
-                detailRows.push_back(separator() | color(Theme::Subtle));
-                detailRows.push_back(hbox({ text(" Created   : ") | dim, text(formatTimestamp(active->getCreatedAt())) | dim }));
+                // Left Pane: List
+                auto leftPane = vbox({
+                    hbox({ text(" Credentials ") | bold | color(Theme::Primary), filler(), text(std::to_string(creds.size()) + " total") | dim }),
+                    separator() | color(Theme::Subtle),
+                    credMenu->Render() | flex_grow,
+                    separator() | color(Theme::Subtle),
+                    btnAddCred->Render() | center,
+                }) | size(WIDTH, EQUAL, 38) | borderRounded | color(Theme::Subtle);
 
-                rightPane = vbox({
-                    text(" Credential Details ") | bold | color(Theme::Primary),
-                    separator() | color(Theme::Subtle),
-                    vbox(std::move(detailRows)) | flex_grow,
-                    separator() | color(Theme::Subtle),
-                    hbox({
-                        btnToggleShow->Render(),
-                        text("  "),
-                        btnEdit->Render(),
-                        text("  "),
-                        btnDelete->Render(),
-                    }) | center,
-                }) | flex_grow | borderRounded | color(Theme::Primary);
+                // Right Pane: Detail Card
+                Element rightPane;
+                if (creds.empty() || selectedCredIndex < 0 || selectedCredIndex >= static_cast<int>(creds.size())) {
+                    rightPane = vbox({
+                        filler(),
+                        text(" No Credential Selected ") | bold | color(Theme::Muted) | center,
+                        text(" Choose a credential from the list or add a new one. ") | dim | color(Theme::Subtle) | center,
+                        filler(),
+                    }) | flex_grow | borderRounded | color(Theme::Subtle);
+                } else {
+                    const auto& active = creds[selectedCredIndex];
+                    std::string displayPass = showPassword ? (revealedPassword.empty() ? active->getPassword() : revealedPassword)
+                                                           : std::string(active->getPassword().size(), '*');
+
+                    Elements detailRows;
+                    detailRows.push_back(hbox({ text(" Service   : ") | bold | color(Theme::TextBright), text(active->getService()) | bold | color(Theme::Primary) }));
+                    detailRows.push_back(hbox({ text(" Type      : ") | bold | color(Theme::TextBright), Theme::badge(active->getType()), text(" " + active->getType()) | dim }));
+                    detailRows.push_back(hbox({ text(" Username  : ") | bold | color(Theme::TextBright), text(active->getUsername().empty() ? "(none)" : active->getUsername()) | color(Theme::TextBright) }));
+                    detailRows.push_back(hbox({ text(" Password  : ") | bold | color(Theme::TextBright), text(displayPass) | bold | color(showPassword ? Theme::Warning : Theme::Muted) }));
+                    detailRows.push_back(hbox({ text(" Notes     : ") | bold | color(Theme::TextBright), text(active->getNotes().empty() ? "(none)" : active->getNotes()) | color(Theme::Muted) }));
+
+                    if (auto web = std::dynamic_pointer_cast<WebCredential>(active)) {
+                        detailRows.push_back(hbox({ text(" URL       : ") | bold | color(Theme::Primary), text(web->getUrl()) | color(Theme::Primary) }));
+                    } else if (auto wifi = std::dynamic_pointer_cast<WiFiCredential>(active)) {
+                        detailRows.push_back(hbox({ text(" SSID      : ") | bold | color(Theme::Success), text(wifi->getSsid()) | color(Theme::Success) }));
+                        detailRows.push_back(hbox({ text(" Protocol  : ") | bold | color(Theme::Success), text(wifi->getSecurityType()) | color(Theme::Success) }));
+                    } else if (auto ssh = std::dynamic_pointer_cast<SSHCredential>(active)) {
+                        detailRows.push_back(hbox({ text(" Host      : ") | bold | color(Theme::Secondary), text(ssh->getHost()) | color(Theme::Secondary) }));
+                        detailRows.push_back(hbox({ text(" Port      : ") | bold | color(Theme::Secondary), text(std::to_string(ssh->getPort())) | color(Theme::Secondary) }));
+                    }
+
+                    detailRows.push_back(separator() | color(Theme::Subtle));
+                    detailRows.push_back(hbox({ text(" Created   : ") | dim, text(formatTimestamp(active->getCreatedAt())) | dim }));
+
+                    Elements actions;
+                    actions.push_back(btnToggleShow->Render());
+                    actions.push_back(text("  "));
+                    actions.push_back(btnCopyPass->Render());
+                    actions.push_back(text("  "));
+                    actions.push_back(btnEdit->Render());
+                    actions.push_back(text("  "));
+                    actions.push_back(btnDelete->Render());
+
+                    Elements paneElements;
+                    paneElements.push_back(text(" Credential Details ") | bold | color(Theme::Primary));
+                    paneElements.push_back(separator() | color(Theme::Subtle));
+                    paneElements.push_back(vbox(std::move(detailRows)) | flex_grow);
+                    if (!copyStatusMessage.empty()) {
+                        paneElements.push_back(text(" " + copyStatusMessage + " ") | color(Theme::Success) | center);
+                    }
+                    paneElements.push_back(separator() | color(Theme::Subtle));
+                    paneElements.push_back(hbox(std::move(actions)) | center);
+
+                    rightPane = vbox(std::move(paneElements)) | flex_grow | borderRounded | color(Theme::Primary);
+                }
+
+                bodyContent = hbox({ leftPane, text(" "), rightPane }) | flex_grow;
             }
-
-            bodyContent = hbox({ leftPane, text(" "), rightPane }) | flex_grow;
 
         } else if (selectedTab == 1) {
             // === TAB 1: Search View ===
-            bodyContent = vbox({
-                text(" Search Encrypted Credentials ") | bold | color(Theme::Primary),
-                text(" Instant query match across service, username, notes, URL, SSID, and host. ") | dim | color(Theme::Muted),
-                separator() | color(Theme::Subtle),
-                hbox({
-                    inputSearch->Render() | flex_grow,
-                    text(" "),
-                    btnRunSearch->Render(),
-                }) | size(HEIGHT, EQUAL, 3),
-                separator() | color(Theme::Subtle),
-                searchMenu->Render() | flex_grow | borderRounded | color(Theme::Subtle),
-            }) | flex_grow | borderRounded | color(Theme::Primary);
+            if (!vault.isCredentialsUnlocked()) {
+                auto lockedSearchCard = vbox({
+                    text(" 🔒 Search Encrypted Credentials ") | bold | color(Theme::Primary) | center,
+                    separator() | color(Theme::Subtle),
+                    text(" Stored credentials must be decrypted before searching. ") | dim | color(Theme::Muted) | center,
+                    separator() | color(Theme::Subtle),
+                    btnUnlockTab1->Render() | center,
+                }) | size(WIDTH, EQUAL, 58) | borderRounded | color(Theme::Primary);
+
+                bodyContent = vbox({
+                    filler(),
+                    hbox({ filler(), lockedSearchCard, filler() }),
+                    filler(),
+                });
+            } else {
+                bodyContent = vbox({
+                    text(" Search Encrypted Credentials ") | bold | color(Theme::Primary),
+                    text(" Instant query match across service, username, notes, URL, SSID, and host. ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({
+                        inputSearch->Render() | flex_grow,
+                        text(" "),
+                        btnRunSearch->Render(),
+                    }) | size(HEIGHT, EQUAL, 3),
+                    separator() | color(Theme::Subtle),
+                    searchMenu->Render() | flex_grow | borderRounded | color(Theme::Subtle),
+                }) | flex_grow | borderRounded | color(Theme::Primary);
+            }
 
         } else if (selectedTab == 2) {
             // === TAB 2: Password Tools ===
@@ -1220,11 +1520,12 @@ void runMasterVaultSession(MasterVault& vault) {
                 checkDigits->Render(),
                 checkSymbols->Render(),
                 separator() | color(Theme::Subtle),
-                btnGenerate->Render() | center,
+                hbox({ btnGenerate->Render(), text("  "), btnCopyGenerated->Render() }) | center,
                 separator() | color(Theme::Subtle),
-                hbox({ text(" Generated : ") | bold, text(generatedPassword) | bold | color(Theme::Warning) }),
+                hbox({ text(" Generated : ") | bold, text(generatedPassword.empty() ? "(none)" : generatedPassword) | bold | color(Theme::Warning) }),
                 gauge(genEntropyRatio) | color(genEntropyRatio > 0.7f ? Theme::Success : (genEntropyRatio > 0.4f ? Theme::Warning : Theme::Danger)),
                 text(genFeedback) | dim | color(Theme::Muted),
+                genCopyMessage.empty() ? text("") : text(" " + genCopyMessage) | bold | color(genCopyColor),
             }) | flex_grow | borderRounded | color(Theme::Primary);
 
             auto evalPane = vbox({
@@ -1243,51 +1544,67 @@ void runMasterVaultSession(MasterVault& vault) {
 
         } else if (selectedTab == 3) {
             // === TAB 3: Security Health Dashboard ===
-            auto creds = vault.getPolymorphicCredentials();
-            SecurityScore score = PasswordAnalyzer::analyze(creds);
+            if (!vault.isCredentialsUnlocked()) {
+                auto lockedAuditCard = vbox({
+                    text(" 🔒 Vault Security Health Dashboard ") | bold | color(Theme::Primary) | center,
+                    separator() | color(Theme::Subtle),
+                    text(" Decryption key required to audit passwords, check entropy, and detect reuse vulnerabilities. ") | dim | color(Theme::Muted) | center,
+                    separator() | color(Theme::Subtle),
+                    btnUnlockTab3->Render() | center,
+                }) | size(WIDTH, EQUAL, 64) | borderRounded | color(Theme::Primary);
 
-            float scoreRatio = std::min(1.0f, static_cast<float>(score.score) / 100.0f);
-            Color scoreColor = (score.score >= 80) ? Theme::Success : (score.score >= 50 ? Theme::Warning : Theme::Danger);
+                bodyContent = vbox({
+                    filler(),
+                    hbox({ filler(), lockedAuditCard, filler() }),
+                    filler(),
+                });
+            } else {
+                auto creds = vault.getPolymorphicCredentials();
+                SecurityScore score = PasswordAnalyzer::analyze(creds);
 
-            Elements warningsList;
-            std::unordered_map<std::string, size_t> passFreq;
-            for (const auto& c : creds) {
-                if (!c) continue;
-                passFreq[c->getPassword()]++;
-                int s = PasswordStrength::score(c->getPassword());
-                if (s < 50) {
-                    warningsList.push_back(text(" ⚠ [WEAK] " + c->getService() + " score " + std::to_string(s) + "/100 — " + PasswordStrength::feedback(c->getPassword())) | color(Theme::Danger));
+                float scoreRatio = std::min(1.0f, static_cast<float>(score.score) / 100.0f);
+                Color scoreColor = (score.score >= 80) ? Theme::Success : (score.score >= 50 ? Theme::Warning : Theme::Danger);
+
+                Elements warningsList;
+                std::unordered_map<std::string, size_t> passFreq;
+                for (const auto& c : creds) {
+                    if (!c) continue;
+                    passFreq[c->getPassword()]++;
+                    int s = PasswordStrength::score(c->getPassword());
+                    if (s < 50) {
+                        warningsList.push_back(text(" ⚠ [WEAK] " + c->getService() + " score " + std::to_string(s) + "/100 — " + PasswordStrength::feedback(c->getPassword())) | color(Theme::Danger));
+                    }
                 }
-            }
-            for (const auto& c : creds) {
-                if (c && passFreq[c->getPassword()] > 1) {
-                    warningsList.push_back(text(" ⚠ [REUSED] " + c->getService() + " shares its password with another account!") | color(Theme::Warning));
+                for (const auto& c : creds) {
+                    if (c && passFreq[c->getPassword()] > 1) {
+                        warningsList.push_back(text(" ⚠ [REUSED] " + c->getService() + " shares its password with another account!") | color(Theme::Warning));
+                    }
                 }
-            }
-            if (warningsList.empty()) {
-                warningsList.push_back(text(" ✓ All stored credentials meet recommended security standards.") | color(Theme::Success));
-            }
+                if (warningsList.empty()) {
+                    warningsList.push_back(text(" ✓ All stored credentials meet recommended security standards.") | color(Theme::Success));
+                }
 
-            bodyContent = vbox({
-                text(" Vault Security Health Dashboard ") | bold | color(Theme::Primary),
-                text(" Real-time cryptographic entropy, reuse detection, and vulnerability scan ") | dim | color(Theme::Muted),
-                separator() | color(Theme::Subtle),
-                hbox({
-                    vbox({
-                        text(" Security Health Score ") | bold | color(Theme::TextBright),
-                        text(" " + std::to_string(score.score) + " / 100 ") | bold | color(scoreColor),
-                        gauge(scoreRatio) | color(scoreColor),
-                    }) | flex_grow | borderRounded | color(scoreColor),
-                    vbox({
-                        hbox({ text(" Total Credentials  : ") | bold, text(std::to_string(creds.size())) }),
-                        hbox({ text(" Reused Passwords   : ") | bold, text(std::to_string(score.reusedPasswords)) | color(score.reusedPasswords > 0 ? Theme::Warning : Theme::Success) }),
-                        hbox({ text(" Old/Stale Accounts : ") | bold, text(std::to_string(score.oldPasswords)) }),
-                    }) | flex_grow | borderRounded | color(Theme::Subtle),
-                }),
-                separator() | color(Theme::Subtle),
-                text(" Audit Findings & Recommendations : ") | bold | color(Theme::TextBright),
-                vbox(std::move(warningsList)) | flex_grow,
-            }) | flex_grow | borderRounded | color(Theme::Primary);
+                bodyContent = vbox({
+                    text(" Vault Security Health Dashboard ") | bold | color(Theme::Primary),
+                    text(" Real-time cryptographic entropy, reuse detection, and vulnerability scan ") | dim | color(Theme::Muted),
+                    separator() | color(Theme::Subtle),
+                    hbox({
+                        vbox({
+                            text(" Security Health Score ") | bold | color(Theme::TextBright),
+                            text(" " + std::to_string(score.score) + " / 100 ") | bold | color(scoreColor),
+                            gauge(scoreRatio) | color(scoreColor),
+                        }) | flex_grow | borderRounded | color(scoreColor),
+                        vbox({
+                            hbox({ text(" Total Credentials  : ") | bold, text(std::to_string(creds.size())) }),
+                            hbox({ text(" Reused Passwords   : ") | bold, text(std::to_string(score.reusedPasswords)) | color(score.reusedPasswords > 0 ? Theme::Warning : Theme::Success) }),
+                            hbox({ text(" Old/Stale Accounts : ") | bold, text(std::to_string(score.oldPasswords)) }),
+                        }) | flex_grow | borderRounded | color(Theme::Subtle),
+                    }),
+                    separator() | color(Theme::Subtle),
+                    text(" Audit Findings & Recommendations : ") | bold | color(Theme::TextBright),
+                    vbox(std::move(warningsList)) | flex_grow,
+                }) | flex_grow | borderRounded | color(Theme::Primary);
+            }
         }
 
         // Bottom Status Bar

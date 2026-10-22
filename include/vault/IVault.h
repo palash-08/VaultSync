@@ -36,11 +36,48 @@ public:
     virtual bool updateCredential(size_t index, std::shared_ptr<Credential> credential) = 0;
 
     /**
+     * @brief Updates a credential at the specified index, validating credential password if secrets are modified.
+     * @param index The zero-based index of the credential to update.
+     * @param credential The new credential to place at the specified index.
+     * @param credPassword Plaintext credential password used to authorize secret changes.
+     * @return True if the credential was successfully updated; false otherwise.
+     */
+    virtual bool updateCredential(size_t index, std::shared_ptr<Credential> credential, const std::string& credPassword) {
+        (void)credPassword;
+        return updateCredential(index, std::move(credential));
+    }
+
+    /**
      * @brief Deletes a credential at the specified index.
      * @param index The zero-based index of the credential to delete.
      * @return True if the credential was successfully deleted; false otherwise.
      */
     virtual bool deleteCredential(size_t index) = 0;
+
+    /**
+     * @brief Deletes a credential at the specified index, authorized by credential password and confirmation.
+     * @param index The zero-based index of the credential to delete.
+     * @param credPassword Plaintext credential password used to authorize deletion.
+     * @param confirmed Explicit deletion confirmation flag (defaults to true).
+     * @return True if the credential was successfully deleted; false otherwise.
+     */
+    virtual bool deleteCredential(size_t index, const std::string& credPassword, bool confirmed = true) {
+        if (!confirmed) return false;
+        (void)credPassword;
+        return deleteCredential(index);
+    }
+
+    /**
+     * @brief Reveals the plaintext secret password for a credential after password verification.
+     * @param index The zero-based index of the credential.
+     * @param credPassword Plaintext credential password used to authorize reveal.
+     * @return The plaintext password string.
+     */
+    virtual std::string revealPassword(size_t index, const std::string& credPassword) const {
+        (void)index;
+        (void)credPassword;
+        return "";
+    }
 
     /**
      * @brief Retrieves all credentials stored in the vault.

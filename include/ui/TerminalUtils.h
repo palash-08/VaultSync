@@ -2,6 +2,7 @@
 #define TERMINAL_UTILS_H
 
 #include <string>
+#include <functional>
 
 namespace TerminalUtils {
 
@@ -17,6 +18,26 @@ namespace TerminalUtils {
      * @return Entered password string.
      */
     std::string readHiddenPassword(const std::string& prompt = "");
+
+    /**
+     * @brief Copies text to the system clipboard using native platform utilities (wl-copy, xclip, xsel, pbcopy, clip.exe)
+     *        or a verified terminal escape sequence (OSC 52).
+     * @param text The text string to copy.
+     * @return True if copying actually succeeded; false if text is empty or no clipboard transport succeeded.
+     */
+    bool copyToClipboard(const std::string& text);
+
+    /**
+     * @brief Reads text back from the system clipboard using native platform utilities.
+     * @return Text currently stored in the clipboard, or empty string on failure.
+     */
+    std::string getClipboardText();
+
+    /**
+     * @brief Sets an optional clipboard hook for automated testing.
+     * @param hook Callable returning bool indicating simulated success or failure.
+     */
+    void setClipboardHookForTesting(std::function<bool(const std::string&)> hook);
 
 }
 

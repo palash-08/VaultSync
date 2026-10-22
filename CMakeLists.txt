@@ -58,6 +58,11 @@ target_link_libraries(vaultsync PRIVATE
 # Alias target to VaultSync for backward-compatible CMake target references
 add_executable(VaultSync ALIAS vaultsync)
 
+# Ensure VaultSync binary matches vaultsync build output
+add_custom_command(TARGET vaultsync POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:vaultsync> ${CMAKE_CURRENT_BINARY_DIR}/VaultSync
+)
+
 # Cipher and cryptographic test binary
 add_executable(test_cipher
     tests/test_cipher.cpp

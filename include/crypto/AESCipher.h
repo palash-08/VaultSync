@@ -55,6 +55,11 @@ public:
     explicit AESCipher(const std::vector<uint8_t>& keyBytes);
 
     /**
+     * @brief Destructor that cleanses symmetric key bytes from memory.
+     */
+    ~AESCipher() override;
+
+    /**
      * @brief Encrypts binary plaintext using AES-256-GCM with a fresh random IV.
      * @param plaintext Raw binary data to encrypt.
      * @return Serialized payload containing [12 bytes IV] + [16 bytes Tag] + [Ciphertext].

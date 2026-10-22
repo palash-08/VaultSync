@@ -4,6 +4,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
 
 #include <algorithm>
 #include <cctype>
@@ -82,6 +83,13 @@ AESCipher::AESCipher(const std::string& keyString)
 
 AESCipher::AESCipher(const std::vector<uint8_t>& keyBytes)
     : key(normalizeKey(keyBytes)) {
+}
+
+AESCipher::~AESCipher() {
+    if (!key.empty()) {
+        OPENSSL_cleanse(key.data(), key.size());
+        key.clear();
+    }
 }
 
 std::vector<uint8_t> AESCipher::encrypt(const std::vector<uint8_t>& plaintext) const {
@@ -193,9 +201,15 @@ const std::vector<uint8_t>& AESCipher::getKey() const {
 }
 
 void AESCipher::setKey(const std::string& keyString) {
+    if (!key.empty()) {
+        OPENSSL_cleanse(key.data(), key.size());
+    }
     key = normalizeKey(keyString);
 }
 
 void AESCipher::setKey(const std::vector<uint8_t>& keyBytes) {
+    if (!key.empty()) {
+        OPENSSL_cleanse(key.data(), key.size());
+    }
     key = normalizeKey(keyBytes);
 }

@@ -3,6 +3,7 @@
 #include "crypto/CryptoUtils.h"
 #include "security/VaultExceptions.h"
 
+#include <openssl/crypto.h>
 #include <chrono>
 #include <filesystem>
 #include <unordered_map>
@@ -36,11 +37,20 @@ MasterVault::MasterVault(const std::string& path)
       credUnlocked(false),
       credFailedAttempts(0),
       credLockedOut(false),
+      sessionState(SessionState::Locked),
+      lastActivityTime(std::chrono::steady_clock::now()),
+      inactivityTimeoutSeconds(0),
+      credLockoutEnd{},
       cipher(nullptr),
       storage(nullptr),
       vault(std::make_unique<Vault>()),
       proxy(std::make_unique<VaultProxy>(*vault, false))
 {
+    // Wire VaultProxy to use MasterVault's credential password verification for sensitive operations
+    proxy->setPasswordVerifier([this](const std::string& pwd) {
+        return this->verifyCredentialPassword(pwd);
+    });
+
     // If a custom path was provided upon construction, initialize file storage
     if (!path.empty()) {
         storage = std::make_unique<FileStorage>(path, nullptr);
@@ -140,6 +150,9 @@ bool MasterVault::create(const std::string& user, const std::string& masterPassw
         credUnlocked = false;
         credFailedAttempts = 0;
         credLockedOut = false;
+        credLockoutEnd = {};
+        sessionState = SessionState::MasterAuthenticated;
+        recordActivity();
         proxy->setAuthenticated(false);
     }
     return saved;
@@ -190,6 +203,9 @@ bool MasterVault::unlockMaster(const std::string& user, const std::string& maste
         credUnlocked = false;
         credFailedAttempts = 0;
         credLockedOut = false;
+        credLockoutEnd = {};
+        sessionState = SessionState::MasterAuthenticated;
+        recordActivity();
         attemptsRemaining = 3;
 
         // Reset lockout tracking on successful login
@@ -248,7 +264,7 @@ void MasterVault::resetMasterLockout(const std::string& username) {
 }
 
 bool MasterVault::isMasterUnlocked() const {
-    return masterUnlocked;
+    return sessionState == SessionState::MasterAuthenticated || sessionState == SessionState::CredentialsUnlocked;
 }
 
 bool MasterVault::hasCredentialPassword() const {
@@ -288,14 +304,43 @@ bool MasterVault::setupCredentialPassword(const std::string& credPassword) {
     credUnlocked = true;
     credFailedAttempts = 0;
     credLockedOut = false;
+    credLockoutEnd = {};
+    sessionState = SessionState::CredentialsUnlocked;
+    recordActivity();
 
     // Step 7: Persist encrypted initial vault file to disk
     return saveToDisk();
 }
 
+bool MasterVault::isCredentialsLockedOut(int& remainingSeconds) const {
+    auto now = std::chrono::steady_clock::now();
+    if (credLockedOut && credLockoutEnd > now) {
+        auto diffMs = std::chrono::duration_cast<std::chrono::milliseconds>(credLockoutEnd - now).count();
+        remainingSeconds = static_cast<int>((diffMs + 999) / 1000);
+        if (remainingSeconds <= 0) {
+            remainingSeconds = 1;
+        }
+        return true;
+    }
+    // Lockout expired: reset attempts
+    if (credLockedOut && now >= credLockoutEnd) {
+        const_cast<MasterVault*>(this)->credFailedAttempts = 0;
+        const_cast<MasterVault*>(this)->credLockedOut = false;
+        const_cast<MasterVault*>(this)->credLockoutEnd = {};
+    }
+    remainingSeconds = 0;
+    return false;
+}
+
 bool MasterVault::unlockCredentials(const std::string& credPassword, int& attemptsRemaining) {
-    // Step 1: Verify prerequisites
-    if (!masterUnlocked || credLockedOut || credPassword.empty() || credPasswordHash.empty()) {
+    // Step 1: Verify prerequisites and check lockout
+    int remainingSeconds = 0;
+    if (isCredentialsLockedOut(remainingSeconds)) {
+        attemptsRemaining = 0;
+        return false;
+    }
+
+    if (!masterUnlocked || credPassword.empty() || credPasswordHash.empty()) {
         attemptsRemaining = 0;
         return false;
     }
@@ -305,6 +350,8 @@ bool MasterVault::unlockCredentials(const std::string& credPassword, int& attemp
         credUnlocked = true;
         credFailedAttempts = 0;
         credLockedOut = false;
+        credLockoutEnd = {};
+        sessionState = SessionState::CredentialsUnlocked;
         attemptsRemaining = 3;
 
         // Step 3: Derive 256-bit encryption key and initialize AES-256-GCM cipher
@@ -337,26 +384,80 @@ bool MasterVault::unlockCredentials(const std::string& credPassword, int& attemp
             return false;
         }
 
+        recordActivity();
         return true;
     }
 
-    // Step 6: Handle failed credential vault login attempt
+    // Step 6: Handle failed credential vault login attempt with timed lockout
     credFailedAttempts++;
     attemptsRemaining = 3 - credFailedAttempts;
     if (attemptsRemaining <= 0) {
         credLockedOut = true;
+        credLockoutEnd = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         attemptsRemaining = 0;
     }
     return false;
 }
 
 bool MasterVault::isCredentialsUnlocked() const {
-    return credUnlocked;
+    return sessionState == SessionState::CredentialsUnlocked;
 }
 
 void MasterVault::resetCredentialsAttempts() {
     credFailedAttempts = 0;
     credLockedOut = false;
+    credLockoutEnd = {};
+}
+
+SessionState MasterVault::getSessionState() const {
+    return sessionState;
+}
+
+void MasterVault::recordActivity() {
+    lastActivityTime = std::chrono::steady_clock::now();
+}
+
+bool MasterVault::checkInactivityTimeout(int timeoutSeconds) {
+    int timeout = (timeoutSeconds > 0) ? timeoutSeconds : inactivityTimeoutSeconds;
+    if (timeout <= 0) {
+        return false;
+    }
+
+    if (sessionState == SessionState::Locked) {
+        return false;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivityTime).count();
+    if (elapsed >= timeout) {
+        // Automatically revoke decrypted credentials access when inactive
+        if (sessionState == SessionState::CredentialsUnlocked) {
+            if (proxy) {
+                proxy->lock();
+            }
+            if (vault) {
+                vault->clear();
+                vault->lock();
+            }
+            cachedCredentials.clear();
+            cipher.reset();
+            if (storage) {
+                storage->setCipher(nullptr);
+            }
+            credUnlocked = false;
+            sessionState = SessionState::MasterAuthenticated;
+            return true;
+        }
+    }
+    return false;
+}
+
+void MasterVault::setInactivityTimeout(int seconds) {
+    inactivityTimeoutSeconds = (seconds > 0) ? seconds : 0;
+}
+
+int MasterVault::getInactivityTimeout() const {
+    return inactivityTimeoutSeconds;
 }
 
 void MasterVault::lock() {
@@ -374,15 +475,26 @@ void MasterVault::lock() {
     credUnlocked = false;
     credFailedAttempts = 0;
     credLockedOut = false;
+    credLockoutEnd = {};
+    sessionState = SessionState::Locked;
+
+    // Step 3: Secure cleansing of sensitive cryptographic buffers where practical
+    if (!masterPasswordHash.empty()) {
+        OPENSSL_cleanse(&masterPasswordHash[0], masterPasswordHash.size());
+    }
+    if (!credPasswordHash.empty()) {
+        OPENSSL_cleanse(&credPasswordHash[0], credPasswordHash.size());
+    }
+
     cachedCredentials.clear();
 
-    // Step 3: Zero out and purge AES cipher from memory
+    // Step 4: Zero out and purge AES cipher from memory
     cipher.reset();
     if (storage) {
         storage->setCipher(nullptr);
     }
 
-    // Step 4: Clear user identity and cached salts/hashes from RAM
+    // Step 5: Clear user identity and cached salts/hashes from RAM
     username.clear();
     vaultPath.clear();
     masterSalt.clear();
@@ -392,7 +504,8 @@ void MasterVault::lock() {
 }
 
 bool MasterVault::addCredential(std::shared_ptr<Credential> credential) {
-    if (!masterUnlocked || !credUnlocked || !credential) {
+    recordActivity();
+    if (sessionState != SessionState::CredentialsUnlocked || !credential) {
         return false;
     }
 
@@ -407,18 +520,38 @@ bool MasterVault::addCredential(std::shared_ptr<Credential> credential) {
 }
 
 bool MasterVault::addCredential(const Credential& credential) {
-    // Wrap value-type Credential in shared_ptr and forward to polymorphic method
     return addCredential(std::make_shared<Credential>(credential));
 }
 
-bool MasterVault::updateCredential(size_t index, std::shared_ptr<Credential> updated) {
-    if (!masterUnlocked || !credUnlocked || !updated) {
+bool MasterVault::updateCredential(size_t index, std::shared_ptr<Credential> updated,
+                                  const std::string& credPassword) {
+    recordActivity();
+    if (sessionState != SessionState::CredentialsUnlocked || !updated) {
         return false;
+    }
+
+    auto current = getCredential(index);
+    if (!current) {
+        return false;
+    }
+
+    std::string existingPass = current->getPassword();
+
+    // Preserve existing password if updated password is empty or untouched
+    if (updated->getPassword().empty()) {
+        updated->setPassword(existingPass);
+    }
+
+    // Modifying stored secret requires credential password authorization
+    if (existingPass != updated->getPassword()) {
+        if (!verifyCredentialPassword(credPassword)) {
+            return false;
+        }
     }
 
     // Route through VaultProxy (enforcing authorization check)
     try {
-        if (!proxy->updateCredential(index, std::move(updated))) {
+        if (!proxy->updateCredential(index, std::move(updated), credPassword)) {
             return false;
         }
         syncLegacyCache();
@@ -428,31 +561,62 @@ bool MasterVault::updateCredential(size_t index, std::shared_ptr<Credential> upd
     }
 }
 
-bool MasterVault::updateCredential(size_t index, const Credential& updated) {
-    return updateCredential(index, std::make_shared<Credential>(updated));
+bool MasterVault::updateCredential(size_t index, const Credential& updated,
+                                  const std::string& credPassword) {
+    return updateCredential(index, std::shared_ptr<Credential>(updated.clone()), credPassword);
+}
+
+bool MasterVault::deleteCredential(size_t index, const std::string& credPassword, bool confirmed) {
+    recordActivity();
+    if (sessionState != SessionState::CredentialsUnlocked) {
+        return false;
+    }
+
+    if (!confirmed) {
+        return false;
+    }
+
+    if (!verifyCredentialPassword(credPassword)) {
+        return false;
+    }
+
+    // Route through VaultProxy (enforcing authorization check)
+    try {
+        if (!proxy->deleteCredential(index, credPassword, confirmed)) {
+            return false;
+        }
+        syncLegacyCache();
+        return saveToDisk();
+    } catch (const UnauthorizedAccessException&) {
+        return false;
+    }
 }
 
 bool MasterVault::deleteCredential(size_t index) {
-    if (!masterUnlocked || !credUnlocked) {
-        return false;
-    }
+    // Direct call without credential password authorization is rejected
+    return false;
+}
 
-    // Route through VaultProxy (enforcing authorization check)
-    try {
-        if (!proxy->deleteCredential(index)) {
-            return false;
-        }
-        syncLegacyCache();
-        return saveToDisk();
-    } catch (const UnauthorizedAccessException&) {
-        return false;
+std::string MasterVault::revealPassword(size_t index, const std::string& credPassword) {
+    recordActivity();
+    if (sessionState != SessionState::CredentialsUnlocked) {
+        throw UnauthorizedAccessException("MasterVault: Credential vault must be unlocked to reveal passwords.");
     }
+    if (!verifyCredentialPassword(credPassword)) {
+        throw UnauthorizedAccessException("MasterVault: Invalid credential password for reveal.");
+    }
+    return proxy->revealPassword(index, credPassword);
+}
+
+std::string MasterVault::copyPassword(size_t index, const std::string& credPassword) {
+    return revealPassword(index, credPassword);
 }
 
 std::shared_ptr<Credential> MasterVault::getCredential(size_t index) const {
-    if (!masterUnlocked || !credUnlocked) {
+    if (sessionState != SessionState::CredentialsUnlocked) {
         return nullptr;
     }
+    const_cast<MasterVault*>(this)->recordActivity();
     try {
         auto all = proxy->getCredentials();
         if (index >= all.size()) {
@@ -465,9 +629,10 @@ std::shared_ptr<Credential> MasterVault::getCredential(size_t index) const {
 }
 
 std::vector<std::shared_ptr<Credential>> MasterVault::getPolymorphicCredentials() const {
-    if (!masterUnlocked || !credUnlocked) {
+    if (sessionState != SessionState::CredentialsUnlocked) {
         return {};
     }
+    const_cast<MasterVault*>(this)->recordActivity();
     try {
         return proxy->getCredentials();
     } catch (const UnauthorizedAccessException&) {
@@ -476,9 +641,10 @@ std::vector<std::shared_ptr<Credential>> MasterVault::getPolymorphicCredentials(
 }
 
 std::vector<std::shared_ptr<Credential>> MasterVault::search(const std::string& query) const {
-    if (!masterUnlocked || !credUnlocked) {
+    if (sessionState != SessionState::CredentialsUnlocked) {
         return {};
     }
+    const_cast<MasterVault*>(this)->recordActivity();
     try {
         return proxy->search(query);
     } catch (const UnauthorizedAccessException&) {
@@ -492,7 +658,7 @@ const std::vector<Credential>& MasterVault::getCredentials() const {
 }
 
 size_t MasterVault::getCredentialCount() const {
-    if (!masterUnlocked || !credUnlocked) {
+    if (sessionState != SessionState::CredentialsUnlocked) {
         return 0;
     }
     try {
