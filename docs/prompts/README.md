@@ -26,6 +26,9 @@ This document chronicles the prompt interactions, architectural directives, and 
 | **Prompt 17** | FTXUI Architecture Review & OpenCode Alignment | Supreet (`feature/ftxui-integration`) | Reviewed TUI boundaries, verified FTXUI v5 APIs, proposed student-defensible incremental plan. | `Theme.h`, `src/main.cpp` |
 | **Prompt 18** | Full FTXUI TUI Implementation | Supreet (`feature/ftxui-integration`) | Implemented full OpenCode-inspired TUI, integrated FTXUI v5 via CMake, created Theme.h, verified 100% tests. | `Theme.h`, `src/main.cpp` |
 | **Prompt 19** | UI Hover Jitter Elimination & Tab Isolation | Supreet (`feature/ftxui-integration`) | Eliminated hover jitter feedback loops in buttons, isolated tab components, and hardened session security on vault lock. | `Theme.h`, `MasterVault.cpp` |
+| **Prompt 20** | Off-Site Backup Feasibility & Tailscale/SFTP Architecture | Orchestrator (Internal) | Formulated feasibility study and implementation plan for off-site backups via Tailscale mesh VPN and SFTP; designed triple-layer encryption, backup manager, and TUI trigger. | Implementation plan |
+| **Prompt 21** | Browser Extension Integration, Daemonization & IPC Architecture | Orchestrator (Internal) | Formulated feasibility matrix for browser extension IPC; established Native Messaging as optimal zero-network-risk design; defined dual-tier locking lifecycle and memory scrubbing model. | Implementation plan |
+| **Prompt 22** | Off-Site Backups via OpenSSH Subprocess & Tailscale | Orchestrator (`feature/off-site_backups`) | Implemented zero-C++-overhead off-site backup via standard OpenSSH `sftp` subprocess (`pipe`, `fork`, `execvp`), batch streaming (`-b -`), atomic two-phase commit, `BackupConfig` (0600), FTXUI TUI tab, and Test 13. | `BackupConfig.h/.cpp`, `SftpSubprocessClient.h/.cpp`, `MasterVault.h/.cpp`, `src/main.cpp`, `test_cipher.cpp` |
 
 ---
 
@@ -513,6 +516,86 @@ Investigation and remediation of UI interaction defects (including mouse hover b
 
 ---
 
+## Prompt 20: Off-Site Vault Backups via Tailscale & SFTP Architecture
+
+### Summary of User Prompt
+The user directed an architectural feasibility study and technical implementation plan for off-site backups over a private Tailscale tailnet using SFTP, investigated whether SFTP is suitable, designed an in-app "Trigger Off-Site Backup" option on the authenticated Master Vault screen, and instructed to document the prompt without modifying code.
+
+### Key Architecture / Design Objectives
+- **Feasibility Assessment**: Evaluate Tailscale mesh VPN (WireGuard, private 100.x.y.z IPs, MagicDNS, NAT traversal) and assess SFTP protocol suitability compared to Taildrop and cloud object storage.
+- **Triple-Layer Defense-in-Depth**: Formulate multi-tiered security combining VaultSync application-level AES-256-GCM ciphertext, SSH/SFTP transport encryption, and Tailscale WireGuard network isolation.
+- **Client & Storage Abstraction**: Design a modular `IBackupClient` interface with configurable remote target parameters (`BackupConfig`) and atomic upload transactions (`.tmp` to timestamped `.bin`).
+- **UI & Workflow Integration**: Architect an on-demand "Trigger Off-Site Backup" option within the authenticated FTXUI Master Vault session screen.
+
+### Orchestrator Actions & Results
+- Conducted thorough feasibility analysis confirming Tailscale + SFTP as an optimal, secure, zero-public-attack-surface architecture.
+- Authored a comprehensive technical design and implementation plan artifact (`tailscale_sftp_offsite_backup_plan.md`).
+- Documented prompt interaction in prompt execution history.
+
+### Artifacts and Files Involved
+- [tailscale_sftp_offsite_backup_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/tailscale_sftp_offsite_backup_plan.md)
+- [docs/prompts/README.md](file:///home/palash/.ao/data/worktrees/vaultsync/orchestrator/vaultsync-orchestrator/docs/prompts/README.md)
+
+---
+
+## Prompt 21: Browser Extension Integration, Daemonization Strategy & Native Messaging Architecture
+
+### Summary of User Prompt
+The user requested an architectural implementation plan for integrating a browser extension (autofill feature), evaluated daemonization options (fully vs. partially vs. zero-daemon), assessed the security risks of localhost TCP socket connections vs. Native Messaging, designed the dual-tier Master Vault and Credential Vault locking lifecycle, requested a feasibility matrix, and instructed to document the prompt.
+
+### Key Architecture / Design Objectives
+- **IPC & Security Feasibility Analysis**: Evaluate Native Messaging (`stdin`/`stdout`), Unix Domain Sockets (UDS), and localhost TCP/WebSockets across security, network attack surfaces, complexity, and resource usage.
+- **Daemonization Strategy**: Formulate a lightweight zero-daemon on-demand native host model (with an optional UDS agent evolution), avoiding battery drain and background process management.
+- **Elimination of Network Attack Surface**: Completely reject localhost TCP/HTTP sockets to eliminate port scanning, CSRF, and DNS rebinding risks.
+- **Dual-Tier Locking Lifecycle**: Define the state machine governing Master Vault (authentication/lockout tier) and Credential Vault (AES encryption/data tier), incorporating inactivity auto-lock and `OPENSSL_cleanse()` memory scrubbing.
+
+### Orchestrator Actions & Results
+- Conducted comparative feasibility study proving Native Messaging as the optimal, zero-open-port standard for browser extension communication.
+- Authored a comprehensive technical design document (`browser_extension_daemon_and_ipc_plan.md`) featuring the IPC feasibility matrix, sequence flow, and locking lifecycle.
+- Documented prompt interaction in prompt execution history.
+
+### Artifacts and Files Involved
+- [browser_extension_daemon_and_ipc_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/browser_extension_daemon_and_ipc_plan.md)
+- [docs/prompts/README.md](file:///home/palash/.ao/data/worktrees/vaultsync/orchestrator/vaultsync-orchestrator/docs/prompts/README.md)
+
+---
+
+## Prompt 22: Off-Site Backups via OpenSSH Subprocess (`sftp`) over Tailscale
+
+### Summary of User Prompt
+The user directed the implementation of Option B (Subprocess Execution via OpenSSH `sftp` / `scp`) on a newly created local branch `feature/off-site_backups`. The requirement specified using Linux subprocesses to minimize C++ overhead (rejecting heavy third-party SSH libraries), with full documentation of the prompt.
+
+### Key Architecture / Design Objectives
+- **Zero C++ Overhead**: Utilize standard POSIX process primitives (`pipe()`, `fork()`, `execvp()`, `waitpid()`) without linking third-party SSH/network C++ libraries (e.g. `libssh2`). Standard OpenSSH client (`/usr/bin/sftp`) provides network transport, key negotiation, and WireGuard routing over Tailscale.
+- **Shell Injection Immunity**: Never invoke `/bin/sh`, `std::system()`, or `popen()`. Construct explicit `char* const argv[]` arrays passed directly to `execvp()` to render host, user, and path injection attacks impossible.
+- **Headless & Non-Interactive Batch Execution**: Configure OpenSSH with mandatory headless flags (`-b -` reading commands from stdin, `-o BatchMode=yes` exiting immediately with code 255 rather than prompting on `/dev/tty`, `-o ConnectTimeout=5`, and `-o StrictHostKeyChecking=accept-new`).
+- **Atomic Two-Phase SFTP Upload**: Upload local AES-256-GCM ciphertext to a remote temporary staging file (`<file>.bin.tmp`), followed by an atomic remote `rename` to `<file>_<timestamp>.bin` and updating a latest symlink (`<file>_latest.bin`). Network disconnects or timeouts mid-transfer never corrupt the active backup snapshot.
+- **XDG-Compliant Configuration**: Store remote connection settings in `$XDG_CONFIG_HOME/vaultsync/backup.conf` with POSIX `0600` permissions and `0700` parent directory permissions.
+- **Non-Blocking FTXUI Integration**: Execute backup transactions in asynchronous `std::thread` workers and update FTXUI state via thread-safe `screen.Post()` callbacks, displaying real-time connection status and audit logs without GUI jitter or freeze.
+
+### Orchestrator Actions & Results
+- Fast-forwarded and synchronized local branch `feature/off-site_backups` to modern `main` containing FTXUI v5 and the feature-based directory hierarchy.
+- Implemented `include/storage/BackupConfig.h` and `src/storage/BackupConfig.cpp` for parsing, saving, and securing `~/.config/vaultsync/backup.conf` (`0600`).
+- Implemented `include/storage/SftpSubprocessClient.h` and `src/storage/SftpSubprocessClient.cpp` executing `/usr/bin/sftp` via POSIX pipes without shell interpreters.
+- Extended `include/auth/MasterVault.h` and `src/auth/MasterVault.cpp` with `performOffsiteBackup()`.
+- Implemented dedicated **Off-Site Backup** tab (Tab 4) in `src/main.cpp` using FTXUI components with live form configuration, asynchronous background thread worker, and status indicators.
+- Added comprehensive unit test suite `testOffsiteBackupConfigAndSubprocess()` (Test 13) in `tests/test_cipher.cpp`.
+- Verified 100% test pass rate across all 13 test suites via CTest.
+
+### Artifacts and Files Involved
+- [include/storage/BackupConfig.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/storage/BackupConfig.h)
+- [src/storage/BackupConfig.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/storage/BackupConfig.cpp)
+- [include/storage/SftpSubprocessClient.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/storage/SftpSubprocessClient.h)
+- [src/storage/SftpSubprocessClient.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/storage/SftpSubprocessClient.cpp)
+- [include/auth/MasterVault.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/auth/MasterVault.h)
+- [src/auth/MasterVault.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/auth/MasterVault.cpp)
+- [src/main.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/main.cpp)
+- [tests/test_cipher.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_cipher.cpp)
+- [CMakeLists.txt](file:///home/palash/Documents/C++_miniProject/VaultSync/CMakeLists.txt)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
 ## Summary of Completed Architecture Coverage
 
 ```text
@@ -531,5 +614,8 @@ Target Architecture Components (23 Sections)
 ├── [x] Section 3/9: Full TUI Menu Wiring & Interactive Application Flow
 ├── [x] Modern TUI: FTXUI Functional Component Interface Architecture (Phase 5)
 ├── [x] UI/UX Polish: Hover Jitter Elimination, Tab Isolation & Workflow Hardening
-└── [x] Packaging & Distribution: Debian (.deb) & Custom APT Repository Architecture
+├── [x] Packaging & Distribution: Debian (.deb) & Custom APT Repository Architecture
+├── [x] Off-Site Backup Architecture: Tailscale Tailnet & SFTP Integration Plan
+├── [x] Off-Site Backup Implementation: OpenSSH Subprocess (sftp), Batch Mode & FTXUI Tab
+└── [x] Browser Extension Integration: Native Messaging & Zero-Daemon IPC Architecture
 ```
