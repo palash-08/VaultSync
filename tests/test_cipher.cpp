@@ -31,6 +31,8 @@
 #include "security/PasswordAnalyzer.h"
 #include "crypto/AESCipher.h"
 #include "ui/TerminalUtils.h"
+#include "storage/BackupConfig.h"
+#include "storage/SftpSubprocessClient.h"
 
 namespace fs = std::filesystem;
 
@@ -1232,6 +1234,96 @@ void testClipboardAndGeneratorWorkflow() {
     std::cout << "  --> PASS: Password generator, clipboard integration, and error handling verified.\n\n";
 }
 
+void testOffsiteBackupConfigAndSubprocess() {
+    std::cout << "[Test 15] Off-Site Backup Configuration & OpenSSH SFTP Subprocess Client\n";
+
+    // 1. Verify BackupConfig defaults
+    BackupConfig defaultConfig;
+    assert(!defaultConfig.isValid() && "Default config with empty host must be invalid!");
+    assert(defaultConfig.port == 22 && "Default port must be 22!");
+    assert(defaultConfig.remoteDir == "backups/vaultsync" && "Default remoteDir must be 'backups/vaultsync'!");
+    assert(defaultConfig.connectTimeout == 5 && "Default timeout must be 5s!");
+
+    // 2. Verify Config save and load with strict 0600 POSIX permissions
+    const std::string testConfPath = "data/test_backup.conf";
+    if (fs::exists(testConfPath)) {
+        fs::remove(testConfPath);
+    }
+
+    BackupConfig configToSave;
+    configToSave.host = "backup-box.tailnet-xyz.ts.net";
+    configToSave.port = 2222;
+    configToSave.user = "tailscale_user";
+    configToSave.remoteDir = "remote/vault_backups";
+    configToSave.identityFile = "~/.ssh/test_id_ed25519";
+    configToSave.connectTimeout = 3;
+
+    assert(configToSave.isValid() && "Populated config must be valid!");
+    assert(configToSave.saveToFile(testConfPath) && "Config saveToFile must return true!");
+    assert(fs::exists(testConfPath) && "Config file must exist on disk!");
+
+#if defined(__unix__) || defined(__APPLE__)
+    struct stat confSt{};
+    int confStatRes = ::stat(testConfPath.c_str(), &confSt);
+    assert(confStatRes == 0 && "Stat must succeed on test config file!");
+    assert((confSt.st_mode & 0777) == 0600 && "backup.conf must have strict 0600 POSIX permissions!");
+#endif
+
+    BackupConfig loadedConfig = BackupConfig::loadFromFile(testConfPath);
+    assert(loadedConfig.isValid());
+    assert(loadedConfig.host == "backup-box.tailnet-xyz.ts.net");
+    assert(loadedConfig.port == 2222);
+    assert(loadedConfig.user == "tailscale_user");
+    assert(loadedConfig.remoteDir == "remote/vault_backups");
+    assert(loadedConfig.identityFile == "~/.ssh/test_id_ed25519");
+    assert(loadedConfig.connectTimeout == 3);
+
+    // Verify path expansion for home directory
+    std::string expanded = BackupConfig::expandPath("~/.ssh/test_id_ed25519");
+    assert(expanded.find('~') == std::string::npos && "expandPath must replace leading tilde with home directory!");
+
+    fs::remove(testConfPath);
+
+    // 3. Verify SFTP Batch Script formatting & atomic operations
+    std::string batch = SftpSubprocessClient::generateBatchScript("/local/path/vault_alice.bin", "backups/vault", "vault_alice", "20261024_120000");
+    assert(batch.find("-mkdir \"backups/vault\"") != std::string::npos && "Batch must contain -mkdir!");
+    assert(batch.find("cd \"backups/vault\"") != std::string::npos && "Batch must contain cd to remote directory!");
+    assert(batch.find("put \"/local/path/vault_alice.bin\" \"vault_alice.bin.tmp\"") != std::string::npos && "Batch must upload to .tmp atomic staging file!");
+    assert(batch.find("rename \"vault_alice.bin.tmp\" \"vault_alice_20261024_120000.bin\"") != std::string::npos && "Batch must atomically rename .tmp to timestamped .bin!");
+    assert(batch.find("-symlink \"vault_alice_20261024_120000.bin\" \"vault_alice_latest.bin\"") != std::string::npos && "Batch must update latest symlink!");
+    assert(batch.find("quit") != std::string::npos && "Batch must conclude with quit!");
+
+    // 4. Verify parameter validation in executeBackup
+    BackupConfig invalidConfig;
+    auto resInvalid = SftpSubprocessClient::executeBackup("/non/existent/file.bin", invalidConfig);
+    assert(!resInvalid.success && "executeBackup on nonexistent file must fail!");
+
+    // 5. Verify MasterVault integration checks
+    MasterVault vault;
+    auto lockedBkp = vault.performOffsiteBackup(configToSave);
+    assert(!lockedBkp.success && "performOffsiteBackup on locked MasterVault must fail!");
+    assert(lockedBkp.message.find("locked") != std::string::npos && "Error message must state Master Vault is locked!");
+
+    // 6. Verify subprocess execution against closed port on localhost (terminates cleanly without hang)
+    const std::string dummyVaultFile = "data/test_dummy_vault.bin";
+    std::ofstream dummyOut(dummyVaultFile, std::ios::binary);
+    dummyOut << "TEST_VAULT_PAYLOAD_CIPHERTEXT";
+    dummyOut.close();
+
+    BackupConfig unreachableConfig;
+    unreachableConfig.host = "127.0.0.1";
+    unreachableConfig.port = 65534; // Closed port
+    unreachableConfig.connectTimeout = 1;
+
+    auto resUnreachable = SftpSubprocessClient::executeBackup(dummyVaultFile, unreachableConfig);
+    assert(!resUnreachable.success && "Subprocess connection to closed port must report failure!");
+    assert(resUnreachable.exitCode != 0 && "Exit code must be non-zero!");
+
+    fs::remove(dummyVaultFile);
+
+    std::cout << "  --> PASS: BackupConfig persistence (0600), batch generation, and SFTP subprocess execution verified.\n\n";
+}
+
 int main() {
     std::cout << "=====================================================\n";
     std::cout << "  VaultSync: Cryptographic Tests (XOR & AES-256-GCM)  \n";
@@ -1251,6 +1343,7 @@ int main() {
     testMasterVaultAESAndProxyIntegration();
     testPhase2And3AuthorizationAndFlow();
     testClipboardAndGeneratorWorkflow();
+    testOffsiteBackupConfigAndSubprocess();
 
     std::cout << "All cipher and vault tests passed successfully!\n";
     return 0;

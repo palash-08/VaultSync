@@ -695,6 +695,24 @@ const std::string& MasterVault::getUsername() const {
     return username;
 }
 
+const std::string& MasterVault::getVaultPath() const {
+    return vaultPath;
+}
+
+SftpSubprocessClient::BackupResult MasterVault::performOffsiteBackup(const BackupConfig& config) {
+    if (!masterUnlocked) {
+        return SftpSubprocessClient::BackupResult{
+            false, -1, "Cannot perform backup: Master Vault is locked.", "", ""
+        };
+    }
+    if (vaultPath.empty() || !std::filesystem::exists(vaultPath)) {
+        return SftpSubprocessClient::BackupResult{
+            false, -1, "Cannot perform backup: Vault file does not exist on disk.", "", ""
+        };
+    }
+    return SftpSubprocessClient::executeBackup(vaultPath, config);
+}
+
 void MasterVault::syncLegacyCache() const {
     cachedCredentials.clear();
     if (!masterUnlocked || !credUnlocked || !proxy) {

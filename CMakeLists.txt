@@ -33,6 +33,8 @@ add_executable(vaultsync
     src/crypto/XORCipher.cpp
     src/crypto/AESCipher.cpp
     src/crypto/CryptoUtils.cpp
+    src/storage/BackupConfig.cpp
+    src/storage/SftpSubprocessClient.cpp
     src/auth/MasterVault.cpp
     src/ui/TerminalUtils.cpp
 )
@@ -80,6 +82,8 @@ add_executable(test_cipher
     src/crypto/XORCipher.cpp
     src/crypto/AESCipher.cpp
     src/crypto/CryptoUtils.cpp
+    src/storage/BackupConfig.cpp
+    src/storage/SftpSubprocessClient.cpp
     src/auth/MasterVault.cpp
     src/ui/TerminalUtils.cpp
 )

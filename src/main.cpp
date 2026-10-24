@@ -10,6 +10,8 @@
 #include "ui/TerminalUtils.h"
 #include "security/VaultExceptions.h"
 #include "ui/Theme.h"
+#include "storage/BackupConfig.h"
+#include "storage/SftpSubprocessClient.h"
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -27,6 +29,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -1042,6 +1045,7 @@ void runMasterVaultSession(MasterVault& vault) {
         " Search ",
         " Password Tools ",
         " Security Audit ",
+        " Off-Site Backup ",
         " Lock & Logout "
     };
     int selectedTab = 0;
@@ -1293,6 +1297,75 @@ void runMasterVaultSession(MasterVault& vault) {
 
     auto btnEval = Button("Evaluate Strength", evalAction, Theme::buttonOption(false));
 
+    // --- Tab 4: Off-Site Backup State & Components ---
+    BackupConfig backupConfig = BackupConfig::loadFromFile();
+    std::string backupHost = backupConfig.host;
+    std::string backupPortStr = std::to_string(backupConfig.port);
+    std::string backupUser = backupConfig.user;
+    std::string backupRemoteDir = backupConfig.remoteDir;
+    std::string backupKeyPath = backupConfig.identityFile;
+    std::string backupTimeoutStr = std::to_string(backupConfig.connectTimeout);
+
+    std::string backupStatusMsg = "Ready. Configure remote host and click Trigger Off-Site Backup.";
+    bool isBackingUp = false;
+    bool lastBackupSuccess = false;
+    bool hasAttemptedBackup = false;
+    std::string lastTimestampedFile;
+
+    Component inputBkpHost = Input(&backupHost, "e.g. backup-node.tailnet.ts.net or 100.x.y.z", Theme::inputOption());
+    Component inputBkpPort = Input(&backupPortStr, "22", Theme::inputOption());
+    Component inputBkpUser = Input(&backupUser, "e.g. palash (optional)", Theme::inputOption());
+    Component inputBkpDir = Input(&backupRemoteDir, "backups/vaultsync", Theme::inputOption());
+    Component inputBkpKey = Input(&backupKeyPath, "e.g. ~/.ssh/id_ed25519 (optional)", Theme::inputOption());
+    Component inputBkpTimeout = Input(&backupTimeoutStr, "5", Theme::inputOption());
+
+    auto saveConfigAction = [&] {
+        backupConfig.host = trimString(backupHost);
+        try { backupConfig.port = std::stoi(backupPortStr); } catch (...) { backupConfig.port = 22; }
+        backupConfig.user = trimString(backupUser);
+        backupConfig.remoteDir = trimString(backupRemoteDir);
+        if (backupConfig.remoteDir.empty()) backupConfig.remoteDir = "backups/vaultsync";
+        backupConfig.identityFile = trimString(backupKeyPath);
+        try { backupConfig.connectTimeout = std::stoi(backupTimeoutStr); } catch (...) { backupConfig.connectTimeout = 5; }
+
+        if (backupConfig.saveToFile()) {
+            backupStatusMsg = "Configuration saved to " + BackupConfig::getDefaultConfigPath();
+        } else {
+            backupStatusMsg = "Failed to save configuration file.";
+        }
+    };
+
+    auto btnSaveConfig = Button("Save Backup Settings", saveConfigAction, Theme::buttonOption(false));
+
+    auto triggerBackupAction = [&] {
+        if (isBackingUp) return;
+
+        saveConfigAction();
+
+        if (!backupConfig.isValid()) {
+            backupStatusMsg = "Please enter a valid remote host before initiating backup.";
+            hasAttemptedBackup = true;
+            lastBackupSuccess = false;
+            return;
+        }
+
+        isBackingUp = true;
+        backupStatusMsg = "Connecting to " + backupConfig.host + " via Tailscale SFTP subprocess...";
+        hasAttemptedBackup = true;
+
+        std::thread([&screen, &vault, cfg = backupConfig, &isBackingUp, &backupStatusMsg, &lastBackupSuccess, &lastTimestampedFile]() {
+            auto result = vault.performOffsiteBackup(cfg);
+            screen.Post([&isBackingUp, &backupStatusMsg, &lastBackupSuccess, &lastTimestampedFile, result]() {
+                isBackingUp = false;
+                lastBackupSuccess = result.success;
+                backupStatusMsg = result.message;
+                lastTimestampedFile = result.remoteFile;
+            });
+        }).detach();
+    };
+
+    auto btnTriggerBackup = Button("☁ Trigger Off-Site Backup", triggerBackupAction, Theme::buttonOption(true));
+
     // Tab-isolated component containers
     auto tab0Unlocked = Container::Horizontal({
         Container::Vertical({ credMenu, btnAddCred }),
@@ -1332,7 +1405,14 @@ void runMasterVaultSession(MasterVault& vault) {
         Container::Vertical({}),
     }, &tab3SubIdx);
 
-    auto tab4Container = Container::Vertical({}); // Tab 4: Lock & Logout
+    auto tab4Container = Container::Vertical({
+        inputBkpHost,
+        Container::Horizontal({ inputBkpPort, inputBkpTimeout }),
+        Container::Horizontal({ inputBkpUser, inputBkpDir }),
+        inputBkpKey,
+        Container::Horizontal({ btnTriggerBackup, btnSaveConfig }),
+    });
+    auto tab5Container = Container::Vertical({}); // Tab 5: Lock & Logout
 
     auto tabContainer = Container::Tab({
         tab0SubContainer,
@@ -1340,6 +1420,7 @@ void runMasterVaultSession(MasterVault& vault) {
         tab2Container,
         tab3SubContainer,
         tab4Container,
+        tab5Container,
     }, &selectedTab);
 
     // Combine top-level tab bar and active tab container
@@ -1363,8 +1444,8 @@ void runMasterVaultSession(MasterVault& vault) {
         tab1SubIdx = vault.isCredentialsUnlocked() ? 1 : 0;
         tab3SubIdx = vault.isCredentialsUnlocked() ? 1 : 0;
 
-        // Handle Tab 4: Lock & Logout
-        if (selectedTab == 4) {
+        // Handle Tab 5: Lock & Logout
+        if (selectedTab == 5) {
             vault.lock();
             exit();
             return text("Logging out and locking vault...") | bold | color(Theme::Warning);
@@ -1605,6 +1686,64 @@ void runMasterVaultSession(MasterVault& vault) {
                     vbox(std::move(warningsList)) | flex_grow,
                 }) | flex_grow | borderRounded | color(Theme::Primary);
             }
+        } else if (selectedTab == 4) {
+            // === TAB 4: Tailscale SFTP Off-Site Backup ===
+            Color statusColor = isBackingUp ? Theme::Primary :
+                                (hasAttemptedBackup ? (lastBackupSuccess ? Theme::Success : Theme::Danger) : Theme::Subtle);
+
+            auto configCard = vbox({
+                text(" Tailscale / SFTP Off-Site Backup Settings ") | bold | color(Theme::Primary),
+                text(" Headless OpenSSH subprocess executing over private WireGuard tailnet with zero shell overhead ") | dim | color(Theme::Muted),
+                separator() | color(Theme::Subtle),
+                hbox({
+                    text(" Remote Host : ") | bold | size(WIDTH, EQUAL, 16),
+                    inputBkpHost->Render() | flex_grow,
+                }),
+                hbox({
+                    text(" SFTP Port   : ") | bold | size(WIDTH, EQUAL, 16),
+                    inputBkpPort->Render() | size(WIDTH, EQUAL, 10),
+                    text("   Timeout (s) : ") | bold,
+                    inputBkpTimeout->Render() | size(WIDTH, EQUAL, 8),
+                }),
+                hbox({
+                    text(" Remote User : ") | bold | size(WIDTH, EQUAL, 16),
+                    inputBkpUser->Render() | flex_grow,
+                    text("   Remote Dir  : ") | bold,
+                    inputBkpDir->Render() | flex_grow,
+                }),
+                hbox({
+                    text(" SSH Key     : ") | bold | size(WIDTH, EQUAL, 16),
+                    inputBkpKey->Render() | flex_grow,
+                }),
+                separator() | color(Theme::Subtle),
+                hbox({
+                    btnTriggerBackup->Render(),
+                    text("  "),
+                    btnSaveConfig->Render(),
+                }) | center,
+            }) | borderRounded | color(Theme::Primary);
+
+            auto statusCard = vbox({
+                text(" Transfer Status & Audit Log ") | bold | color(Theme::TextBright),
+                separator() | color(Theme::Subtle),
+                hbox({
+                    text(isBackingUp ? " ⟳ " : (hasAttemptedBackup ? (lastBackupSuccess ? " ✓ " : " ✗ ") : " ℹ ")) | bold | color(statusColor),
+                    text(backupStatusMsg) | bold | color(statusColor) | flex_grow,
+                }),
+                separator() | color(Theme::Subtle),
+                vbox({
+                    hbox({ text(" • Local Source : ") | dim, text(vault.getVaultPath()) | color(Theme::TextBright) }),
+                    hbox({ text(" • Encrypted    : ") | dim, text("AES-256-GCM ciphertext payload (no plaintext is ever exposed)") | color(Theme::Success) }),
+                    hbox({ text(" • Batch Atomic : ") | dim, text("Two-phase atomic commit (.tmp upload -> atomic rename)") | color(Theme::Subtle) }),
+                    hbox({ text(" • Config File  : ") | dim, text(BackupConfig::getDefaultConfigPath()) | color(Theme::Subtle) }),
+                }),
+            }) | borderRounded | color(statusColor);
+
+            bodyContent = vbox({
+                configCard,
+                text(" "),
+                statusCard,
+            }) | flex_grow;
         }
 
         // Bottom Status Bar

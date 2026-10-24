@@ -11,6 +11,8 @@
 #include "crypto/ICipher.h"
 #include "storage/Vault.h"
 #include "vault/VaultProxy.h"
+#include "storage/BackupConfig.h"
+#include "storage/SftpSubprocessClient.h"
 
 class MasterVault {
 public:
@@ -363,6 +365,19 @@ public:
      * @return Const reference to the username string.
      */
     const std::string& getUsername() const;
+
+    /**
+     * @brief Returns the local file path to the vault binary file.
+     * @return Path to vault file on disk.
+     */
+    const std::string& getVaultPath() const;
+
+    /**
+     * @brief Performs an off-site backup of the encrypted vault file over Tailscale via SFTP.
+     * @param config Remote connection and target parameters (defaults to loading ~/.config/vaultsync/backup.conf).
+     * @return BackupResult indicating success, exit code, and captured messages.
+     */
+    SftpSubprocessClient::BackupResult performOffsiteBackup(const BackupConfig& config = BackupConfig::loadFromFile());
 };
 
 using SessionState = MasterVault::SessionState;
