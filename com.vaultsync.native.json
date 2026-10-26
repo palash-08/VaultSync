@@ -1,0 +1,9 @@
+{
+  "name": "com.vaultsync.native",
+  "description": "VaultSync Native Messaging Host",
+  "path": "/usr/bin/vaultsync-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://fhmcpggbfoaaglijeknjdnpnehbpdajb/"
+  ]
+}

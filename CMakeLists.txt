@@ -10,6 +10,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenSSL REQUIRED)
 
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+    FetchContent_Declare(nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
 include(FetchContent)
 FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
@@ -104,10 +113,105 @@ enable_testing()
 add_test(NAME test_cipher COMMAND test_cipher)
 
 # -----------------------------------------------------------------------------
+# C++ Native Messaging Host (vaultsync-host)
+# -----------------------------------------------------------------------------
+add_executable(vaultsync-host
+    src/native_host/main.cpp
+    src/native_host/NativeHost.cpp
+    src/credentials/Credential.cpp
+    src/credentials/WebCredential.cpp
+    src/credentials/WiFiCredential.cpp
+    src/credentials/SSHCredential.cpp
+    src/credentials/CredentialFactory.cpp
+    src/storage/Vault.cpp
+    src/vault/VaultProxy.cpp
+    src/security/PasswordGenerator.cpp
+    src/security/PasswordStrength.cpp
+    src/security/PasswordAnalyzer.cpp
+    src/storage/FileStorage.cpp
+    src/crypto/XORCipher.cpp
+    src/crypto/AESCipher.cpp
+    src/crypto/CryptoUtils.cpp
+    src/storage/BackupConfig.cpp
+    src/storage/SftpSubprocessClient.cpp
+    src/auth/MasterVault.cpp
+    src/ui/TerminalUtils.cpp
+)
+
+target_include_directories(vaultsync-host PRIVATE
+    include
+    include/crypto
+    include/auth
+    include/credentials
+    include/storage
+    include/security
+    include/vault
+    include/ui
+    include/native_host
+)
+
+target_link_libraries(vaultsync-host PRIVATE
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+)
+
+# -----------------------------------------------------------------------------
+# Native Messaging Host Unit Tests
+# -----------------------------------------------------------------------------
+add_executable(test_native_host
+    tests/test_native_host.cpp
+    src/native_host/NativeHost.cpp
+    src/credentials/Credential.cpp
+    src/credentials/WebCredential.cpp
+    src/credentials/WiFiCredential.cpp
+    src/credentials/SSHCredential.cpp
+    src/credentials/CredentialFactory.cpp
+    src/storage/Vault.cpp
+    src/vault/VaultProxy.cpp
+    src/security/PasswordGenerator.cpp
+    src/security/PasswordStrength.cpp
+    src/security/PasswordAnalyzer.cpp
+    src/storage/FileStorage.cpp
+    src/crypto/XORCipher.cpp
+    src/crypto/AESCipher.cpp
+    src/crypto/CryptoUtils.cpp
+    src/storage/BackupConfig.cpp
+    src/storage/SftpSubprocessClient.cpp
+    src/auth/MasterVault.cpp
+    src/ui/TerminalUtils.cpp
+)
+
+target_include_directories(test_native_host PRIVATE
+    include
+    include/crypto
+    include/auth
+    include/credentials
+    include/storage
+    include/security
+    include/vault
+    include/ui
+    include/native_host
+)
+
+target_link_libraries(test_native_host PRIVATE
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+)
+
+add_test(NAME test_native_host COMMAND test_native_host)
+
+# -----------------------------------------------------------------------------
 # Installation Rules
 # -----------------------------------------------------------------------------
-install(TARGETS vaultsync
+install(TARGETS vaultsync vaultsync-host
     RUNTIME DESTINATION bin
+)
+
+install(FILES com.vaultsync.native.json
+    DESTINATION /etc/chromium/native-messaging-hosts
+)
+install(FILES com.vaultsync.native.json
+    DESTINATION /etc/opt/chrome/native-messaging-hosts
 )
 
 install(FILES README.md architecture.md

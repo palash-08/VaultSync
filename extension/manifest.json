@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "VaultSync Autofill Companion",
+  "version": "1.0.0",
+  "description": "Secure on-demand credential autofill powered by VaultSync C++ Native Messaging",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA22MFJtmVht9TjfDNQQ6P7BD4Tg6AtHqEPKybWZUPWLHPxpCU9JB4Aas5+aN7C8/pE1o6wK5OElFXUzDondbkFeTXrNIBc9zgqnbiUHFe9OEiR130tpgIOFUX4gYa7/EgtPAu6koe67g2TmMPBzBkZxDys4AqmK4Q6ku1Q32X+moCl+V0dpCdPQqHOjbssY8bFP2DwH87/DPp5Ojc6JGvRG9n+OaFL4mGAI32vCvSdrLmZb1AYx5SosZhdAwcE2KzgLIPcEejsXYPVqiaURn4w3axgE/PHOoj1HEv/UoTTBvOXgfGDAMrYWxlmK8UNYWmRfyz3qyw9ehriAojWS6xQwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "VaultSync"
+  }
+}
