@@ -26,9 +26,13 @@ This document chronicles the prompt interactions, architectural directives, and 
 | **Prompt 17** | FTXUI Architecture Review & OpenCode Alignment | Supreet (`feature/ftxui-integration`) | Reviewed TUI boundaries, verified FTXUI v5 APIs, proposed student-defensible incremental plan. | `Theme.h`, `src/main.cpp` |
 | **Prompt 18** | Full FTXUI TUI Implementation | Supreet (`feature/ftxui-integration`) | Implemented full OpenCode-inspired TUI, integrated FTXUI v5 via CMake, created Theme.h, verified 100% tests. | `Theme.h`, `src/main.cpp` |
 | **Prompt 19** | UI Hover Jitter Elimination & Tab Isolation | Supreet (`feature/ftxui-integration`) | Eliminated hover jitter feedback loops in buttons, isolated tab components, and hardened session security on vault lock. | `Theme.h`, `MasterVault.cpp` |
-| **Prompt 20** | Off-Site Backup Feasibility & Tailscale/SFTP Architecture | Orchestrator (Internal) | Formulated feasibility study and implementation plan for off-site backups via Tailscale mesh VPN and SFTP; designed triple-layer encryption, backup manager, and TUI trigger. | Implementation plan |
-| **Prompt 21** | Browser Extension Integration, Daemonization & IPC Architecture | Orchestrator (Internal) | Formulated feasibility matrix for browser extension IPC; established Native Messaging as optimal zero-network-risk design; defined dual-tier locking lifecycle and memory scrubbing model. | Implementation plan |
-| **Prompt 22** | Off-Site Backups via OpenSSH Subprocess & Tailscale | Orchestrator (`feature/off-site_backups`) | Implemented zero-C++-overhead off-site backup via standard OpenSSH `sftp` subprocess (`pipe`, `fork`, `execvp`), batch streaming (`-b -`), atomic two-phase commit, `BackupConfig` (0600), FTXUI TUI tab, and Test 13. | `BackupConfig.h/.cpp`, `SftpSubprocessClient.h/.cpp`, `MasterVault.h/.cpp`, `src/main.cpp`, `test_cipher.cpp` |
+| **Prompt 20** | Off-Site Backup Feasibility & Tailscale/SFTP Architecture | Orchestrator (Internal) | Evaluated Tailscale VPN & SFTP feasibility; architected triple-layer defense, backup manager, and in-app TUI trigger. | `tailscale_sftp_offsite_backup_plan.md` |
+| **Prompt 21** | Browser Extension Integration & Native Messaging Architecture | Orchestrator (Internal) | Formulated browser IPC feasibility matrix; established Native Messaging over TCP; defined dual-tier locking lifecycle. | `browser_extension_daemon_and_ipc_plan.md` |
+| **Prompt 22** | Off-Site Backups via OpenSSH Subprocess & Tailscale | Orchestrator (`feature/off-site_backups`) | Implemented zero-overhead backup via OpenSSH subprocess (`pipe`/`execvp`), batch mode (`-b -`), atomic commit, FTXUI Tab 4, and Test 13. | `BackupConfig`, `SftpSubprocessClient`, `src/main.cpp` |
+| **Prompt 23** | Chromium Extension Workflow & Implementation Roadmap | Orchestrator (Internal) | Formulated 5-phase roadmap for Chromium MV3 autofill extension and C++ native host with deterministic RSA identity. | `chromium_extension_native_messaging_plan.md` |
+| **Prompt 24** | Chromium Extension Phase 1 & 2 Technical Deep Dive | Orchestrator (Internal) | Detailed mechanics of Phase 1 (OpenSSL RSA key derivation, extension ID mapping) and Phase 2 (4-byte binary framing, JSON protocol, MasterVault wiring). | Technical explanation & prompt log |
+| **Prompt 25** | Phase 1 & 2 Implementation: Deterministic Identity & Native Host | Orchestrator (`feature/off-site_backups`) | Implemented deterministic RSA extension key pair, manifest V3 with fixed ID, C++ `vaultsync-host` binary framing, JSON protocol, and test suite. | `NativeHost.h/.cpp`, `main.cpp`, `test_native_host.cpp` |
+| **Prompt 26** | CI/CD Standby Agent Provisioning & Orchestrator Execution | Orchestrator (`feature/off-site_backups`) | Spawned CI/CD standby subagent with full VPS reprepro context; continued Phase 1 & 2 implementation in parent orchestrator. | Subagent `CI/CD Standby Specialist` |
 
 ---
 
@@ -255,104 +259,6 @@ The user requested an architectural guide and comprehensive feasibility analysis
 
 ---
 
-## Prompt 13: Modern TUI Architecture & FTXUI Implementation Planning
-
-### Summary of User Prompt
-The user directed the formulation of an implementation plan for embedding FTXUI (modern C++ functional terminal library) into VaultSync, requested an assessment of whether npx skills/tools are required for terminal UI design, and instructed to document the prompt.
-
-### Key Architecture / Design Objectives
-- Formulate an end-to-end embedding strategy for FTXUI via CMake FetchContent (`ftxui::screen`, `ftxui::dom`, `ftxui::component`).
-- Assess Node/npx ecosystem tooling for TUI design and confirm native C++ FTXUI styling autonomy.
-- Design a modular, reactive component tree separating UI views from `MasterVault` backend logic.
-
-### Orchestrator Actions & Results
-- Designed 4-phase implementation plan: CMake dependency integration, reactive component architecture, screen implementations, and verification.
-- Evaluated terminal UI design tools: confirmed no npx packages are required for FTXUI; identified aesthetic palettes (Catppuccin, Nord) and ASCII header generators for optional design flair.
-- Documented prompt interaction in prompt history.
-
-### Artifacts and Files Involved
-- [CMakeLists.txt](file:///home/supreet/VaultSync/CMakeLists.txt)
-- [src/main.cpp](file:///home/supreet/VaultSync/src/main.cpp)
-- [docs/prompts/README.md](file:///home/supreet/VaultSync/docs/prompts/README.md)
-
----
-
-## Prompt 14: FTXUI Architecture Review & OpenCode Design Alignment
-
-### Summary of User Prompt
-The user directed a critical review of the proposed FTXUI implementation plan prior to code modifications: inspect existing TUI and boundaries, confirm FTXUI integration status, identify minimal changes for an OpenCode-inspired aesthetic, verify FTXUI APIs, separate essential from optional features, propose an incremental student-defensible plan, and document the prompt.
-
-### Key Architecture / Design Objectives
-- Validate existing codebase boundaries and confirm FTXUI is not yet integrated.
-- Formulate a beginner-readable, procedural FTXUI design defendable in an academic viva without over-engineered asynchronous state machines.
-- Specify minimal styling changes to achieve an OpenCode-inspired visual language (subtle borders, dark themes, accent badges).
-
-### Orchestrator Actions & Results
-- Inspected codebase: confirmed FTXUI is absent and needs integration via CMake FetchContent.
-- Audited proposed APIs against FTXUI v5.0.0; replaced complex async state machine with synchronous per-screen components.
-- Established phased incremental roadmap starting with theme helpers and the authentication home screen.
-- Updated prompt documentation in compliance with format standards.
-
-### Artifacts and Files Involved
-- [CMakeLists.txt](file:///home/supreet/VaultSync/CMakeLists.txt)
-- [src/main.cpp](file:///home/supreet/VaultSync/src/main.cpp)
-- [docs/prompts/README.md](file:///home/supreet/VaultSync/docs/prompts/README.md)
-
----
-
-## Prompt 15: Full FTXUI TUI Implementation & OpenCode Redesign
-
-### Summary of User Prompt
-The user directed the complete FTXUI redesign of VaultSync in one cohesive pass on branch `feature/ftxui-integration`: integrate FTXUI via CMake, create reusable styling helpers, implement centered auth screens, split-pane dashboard, polymorphic dialogs, password tools, and security health gauge, preserve all security/cryptography/lockout logic, and verify builds and unit tests without creating Git commits.
-
-### Key Architecture / Design Objectives
-- Integrate FTXUI v5.0.0 via CMake FetchContent while preserving headless `test_cipher` isolation.
-- Establish OpenCode styling architecture in `include/Theme.h` (rounded borders, custom palette, type badges).
-- Redesign `src/main.cpp` with centered auth, split-pane credential manager, modal forms, password generator, and audit gauge.
-
-### Orchestrator Actions & Results
-- Integrated `ftxui::screen`, `ftxui::dom`, and `ftxui::component` via CMake `FetchContent`.
-- Created `include/Theme.h` defining OpenCode colors, badge decorators, and component styling options.
-- Overhauled `src/main.cpp` implementing all screens connected to `MasterVault` without mocking.
-- Compiled with GCC 16 and verified 100% pass across all 12 test suites in `test_cipher`.
-- Confirmed full terminal launch and rendering via PTY test harness.
-
-### Artifacts and Files Involved
-- [CMakeLists.txt](file:///home/supreet/VaultSync/CMakeLists.txt)
-- [include/Theme.h](file:///home/supreet/VaultSync/include/Theme.h)
-- [src/main.cpp](file:///home/supreet/VaultSync/src/main.cpp)
-- [docs/prompts/README.md](file:///home/supreet/VaultSync/docs/prompts/README.md)
-
----
-
-## Prompt 16: UI Hover Jitter Elimination, Component Tab Isolation, & Vault Workflow Hardening
-
-### Summary of User Prompt
-Investigation and remediation of UI interaction defects (including mouse hover button jitter caused by dimension feedback loops) and workflow bugs across Master Vault authentication, credential creation/editing modal navigation, and dashboard state management.
-
-### Key Architecture / Design Objectives
-- Eliminate hover jitter feedback loops in buttons by enforcing strict dimension invariance across normal, hover, and focused states in `Theme::buttonOption`.
-- Isolate tab components in `runMasterVaultSession` using `ftxui::Container::Tab` to prevent invisible background tabs from intercepting focus and mouse events.
-- Prevent focus traps in polymorphic Add/Edit dialogs by dynamically mounting only the inputs corresponding to the active credential type.
-- Harden session security by purging in-memory credentials, salts, hashes, and lockout counters on vault lock, and auto-locking when credential unlock is dismissed.
-- Enhance UX with automatic password field clearing on failed auth, auto-selection of newly added credentials, and search-result navigation jumps.
-
-### Orchestrator Actions & Results
-- Resolved button hover jitter in `include/Theme.h` by maintaining `borderRounded` across all states, preventing 2-row/2-column element resizing oscillations.
-- Updated `include/Theme.h` input placeholder transform with column-stable spacing between focused and unfocused states.
-- Replaced flat containers in `src/main.cpp` with `Container::Tab` for main navigation and modal polymorphic fields.
-- Implemented auto-hiding of passwords on selection changes and Enter-to-jump navigation from search results to dashboard entries.
-- Hardened `MasterVault::lock()` in `src/MasterVault.cpp` to wipe RAM caches and reset attempt counters.
-- Built cleanly and verified all 12 test suites in `test_cipher` and end-to-end interactive flows.
-
-### Artifacts and Files Involved
-- [include/Theme.h](file:///home/supreet/VaultSync/include/Theme.h)
-- [src/MasterVault.cpp](file:///home/supreet/VaultSync/src/MasterVault.cpp)
-- [src/main.cpp](file:///home/supreet/VaultSync/src/main.cpp)
-- [docs/prompts/README.md](file:///home/supreet/VaultSync/docs/prompts/README.md)
-
----
-
 ## Prompt 13: Phase 1 — Core Code & Test Suite Rectification
 
 ### Summary of User Prompt
@@ -494,19 +400,14 @@ The user directed the complete FTXUI redesign of VaultSync in one cohesive pass 
 Investigation and remediation of UI interaction defects (including mouse hover button jitter caused by dimension feedback loops) and workflow bugs across Master Vault authentication, credential creation/editing modal navigation, and dashboard state management.
 
 ### Key Architecture / Design Objectives
-- Eliminate hover jitter feedback loops in buttons by enforcing strict dimension invariance across normal, hover, and focused states in `Theme::buttonOption`.
-- Isolate tab components in `runMasterVaultSession` using `ftxui::Container::Tab` to prevent invisible background tabs from intercepting focus and mouse events.
-- Prevent focus traps in polymorphic Add/Edit dialogs by dynamically mounting only the inputs corresponding to the active credential type.
-- Harden session security by purging in-memory credentials, salts, hashes, and lockout counters on vault lock, and auto-locking when credential unlock is dismissed.
-- Enhance UX with automatic password field clearing on failed auth, auto-selection of newly added credentials, and search-result navigation jumps.
+- Eliminate button hover jitter by maintaining strict dimension invariance across states in `Theme::buttonOption`.
+- Isolate tab components using `ftxui::Container::Tab` to prevent background tabs from intercepting focus and clicks.
+- Harden session security by purging in-memory credentials, salts, hashes, and lockout counters on vault lock.
 
 ### Orchestrator Actions & Results
-- Resolved button hover jitter in `include/Theme.h` by maintaining `borderRounded` across all states, preventing 2-row/2-column element resizing oscillations.
-- Updated `include/Theme.h` input placeholder transform with column-stable spacing between focused and unfocused states.
-- Replaced flat containers in `src/main.cpp` with `Container::Tab` for main navigation and modal polymorphic fields.
-- Implemented auto-hiding of passwords on selection changes and Enter-to-jump navigation from search results to dashboard entries.
-- Hardened `MasterVault::lock()` in `src/MasterVault.cpp` to wipe RAM caches and reset attempt counters.
-- Built cleanly and verified all 12 test suites in `test_cipher` and end-to-end interactive flows.
+- Updated `include/Theme.h` button and input placeholder transforms to prevent dimension oscillations.
+- Replaced flat containers in `src/main.cpp` with `Container::Tab` for main navigation and modal inputs.
+- Hardened `MasterVault::lock()` to wipe RAM caches and verified all 12 test suites in `test_cipher`.
 
 ### Artifacts and Files Involved
 - [include/Theme.h](file:///home/supreet/VaultSync/include/Theme.h)
@@ -522,14 +423,13 @@ Investigation and remediation of UI interaction defects (including mouse hover b
 The user directed an architectural feasibility study and technical implementation plan for off-site backups over a private Tailscale tailnet using SFTP, investigated whether SFTP is suitable, designed an in-app "Trigger Off-Site Backup" option on the authenticated Master Vault screen, and instructed to document the prompt without modifying code.
 
 ### Key Architecture / Design Objectives
-- **Feasibility Assessment**: Evaluate Tailscale mesh VPN (WireGuard, private 100.x.y.z IPs, MagicDNS, NAT traversal) and assess SFTP protocol suitability compared to Taildrop and cloud object storage.
-- **Triple-Layer Defense-in-Depth**: Formulate multi-tiered security combining VaultSync application-level AES-256-GCM ciphertext, SSH/SFTP transport encryption, and Tailscale WireGuard network isolation.
-- **Client & Storage Abstraction**: Design a modular `IBackupClient` interface with configurable remote target parameters (`BackupConfig`) and atomic upload transactions (`.tmp` to timestamped `.bin`).
-- **UI & Workflow Integration**: Architect an on-demand "Trigger Off-Site Backup" option within the authenticated FTXUI Master Vault session screen.
+- Evaluate Tailscale mesh VPN and SFTP protocol suitability compared to Taildrop and cloud object storage.
+- Design triple-layer defense-in-depth: AES-256-GCM vault encryption, SSH/SFTP transport security, and WireGuard isolation.
+- Architect modular `IBackupClient` interface, XDG configuration, atomic uploads, and in-app FTXUI trigger.
 
 ### Orchestrator Actions & Results
-- Conducted thorough feasibility analysis confirming Tailscale + SFTP as an optimal, secure, zero-public-attack-surface architecture.
-- Authored a comprehensive technical design and implementation plan artifact (`tailscale_sftp_offsite_backup_plan.md`).
+- Completed feasibility study confirming Tailscale + SFTP as an optimal zero-public-attack-surface architecture.
+- Authored comprehensive technical design artifact `tailscale_sftp_offsite_backup_plan.md`.
 - Documented prompt interaction in prompt execution history.
 
 ### Artifacts and Files Involved
@@ -544,14 +444,13 @@ The user directed an architectural feasibility study and technical implementatio
 The user requested an architectural implementation plan for integrating a browser extension (autofill feature), evaluated daemonization options (fully vs. partially vs. zero-daemon), assessed the security risks of localhost TCP socket connections vs. Native Messaging, designed the dual-tier Master Vault and Credential Vault locking lifecycle, requested a feasibility matrix, and instructed to document the prompt.
 
 ### Key Architecture / Design Objectives
-- **IPC & Security Feasibility Analysis**: Evaluate Native Messaging (`stdin`/`stdout`), Unix Domain Sockets (UDS), and localhost TCP/WebSockets across security, network attack surfaces, complexity, and resource usage.
-- **Daemonization Strategy**: Formulate a lightweight zero-daemon on-demand native host model (with an optional UDS agent evolution), avoiding battery drain and background process management.
-- **Elimination of Network Attack Surface**: Completely reject localhost TCP/HTTP sockets to eliminate port scanning, CSRF, and DNS rebinding risks.
-- **Dual-Tier Locking Lifecycle**: Define the state machine governing Master Vault (authentication/lockout tier) and Credential Vault (AES encryption/data tier), incorporating inactivity auto-lock and `OPENSSL_cleanse()` memory scrubbing.
+- Evaluate IPC options (Native Messaging vs. Unix Domain Sockets vs. TCP) across security and resource usage.
+- Formulate zero-daemon on-demand native host model, eliminating open network ports and attack surfaces.
+- Define dual-tier locking lifecycle (Master Vault vs. Credential Vault) with memory scrubbing via `OPENSSL_cleanse()`.
 
 ### Orchestrator Actions & Results
-- Conducted comparative feasibility study proving Native Messaging as the optimal, zero-open-port standard for browser extension communication.
-- Authored a comprehensive technical design document (`browser_extension_daemon_and_ipc_plan.md`) featuring the IPC feasibility matrix, sequence flow, and locking lifecycle.
+- Authored IPC feasibility matrix proving Native Messaging (`stdin`/`stdout`) superior to localhost TCP.
+- Generated technical design artifact `browser_extension_daemon_and_ipc_plan.md` detailing architecture and lifecycles.
 - Documented prompt interaction in prompt execution history.
 
 ### Artifacts and Files Involved
@@ -566,21 +465,14 @@ The user requested an architectural implementation plan for integrating a browse
 The user directed the implementation of Option B (Subprocess Execution via OpenSSH `sftp` / `scp`) on a newly created local branch `feature/off-site_backups`. The requirement specified using Linux subprocesses to minimize C++ overhead (rejecting heavy third-party SSH libraries), with full documentation of the prompt.
 
 ### Key Architecture / Design Objectives
-- **Zero C++ Overhead**: Utilize standard POSIX process primitives (`pipe()`, `fork()`, `execvp()`, `waitpid()`) without linking third-party SSH/network C++ libraries (e.g. `libssh2`). Standard OpenSSH client (`/usr/bin/sftp`) provides network transport, key negotiation, and WireGuard routing over Tailscale.
-- **Shell Injection Immunity**: Never invoke `/bin/sh`, `std::system()`, or `popen()`. Construct explicit `char* const argv[]` arrays passed directly to `execvp()` to render host, user, and path injection attacks impossible.
-- **Headless & Non-Interactive Batch Execution**: Configure OpenSSH with mandatory headless flags (`-b -` reading commands from stdin, `-o BatchMode=yes` exiting immediately with code 255 rather than prompting on `/dev/tty`, `-o ConnectTimeout=5`, and `-o StrictHostKeyChecking=accept-new`).
-- **Atomic Two-Phase SFTP Upload**: Upload local AES-256-GCM ciphertext to a remote temporary staging file (`<file>.bin.tmp`), followed by an atomic remote `rename` to `<file>_<timestamp>.bin` and updating a latest symlink (`<file>_latest.bin`). Network disconnects or timeouts mid-transfer never corrupt the active backup snapshot.
-- **XDG-Compliant Configuration**: Store remote connection settings in `$XDG_CONFIG_HOME/vaultsync/backup.conf` with POSIX `0600` permissions and `0700` parent directory permissions.
-- **Non-Blocking FTXUI Integration**: Execute backup transactions in asynchronous `std::thread` workers and update FTXUI state via thread-safe `screen.Post()` callbacks, displaying real-time connection status and audit logs without GUI jitter or freeze.
+- Utilize standard POSIX primitives (`pipe`, `fork`, `execvp`) with `/usr/bin/sftp` to eliminate third-party SSH C++ libraries.
+- Ensure shell injection immunity by avoiding `/bin/sh` or `popen()`, executing direct `argv` arrays with headless `-b -` batch streaming.
+- Implement atomic two-phase staging (`.tmp` to timestamped `.bin`), XDG configuration (`0600`), and non-blocking FTXUI background worker.
 
 ### Orchestrator Actions & Results
-- Fast-forwarded and synchronized local branch `feature/off-site_backups` to modern `main` containing FTXUI v5 and the feature-based directory hierarchy.
-- Implemented `include/storage/BackupConfig.h` and `src/storage/BackupConfig.cpp` for parsing, saving, and securing `~/.config/vaultsync/backup.conf` (`0600`).
-- Implemented `include/storage/SftpSubprocessClient.h` and `src/storage/SftpSubprocessClient.cpp` executing `/usr/bin/sftp` via POSIX pipes without shell interpreters.
-- Extended `include/auth/MasterVault.h` and `src/auth/MasterVault.cpp` with `performOffsiteBackup()`.
-- Implemented dedicated **Off-Site Backup** tab (Tab 4) in `src/main.cpp` using FTXUI components with live form configuration, asynchronous background thread worker, and status indicators.
-- Added comprehensive unit test suite `testOffsiteBackupConfigAndSubprocess()` (Test 13) in `tests/test_cipher.cpp`.
-- Verified 100% test pass rate across all 13 test suites via CTest.
+- Implemented `BackupConfig` (`~/.config/vaultsync/backup.conf`) and `SftpSubprocessClient` using POSIX pipe/execvp streaming.
+- Integrated `performOffsiteBackup()` into `MasterVault` and added dedicated Off-Site Backup tab (Tab 4) in `src/main.cpp`.
+- Added unit test suite `testOffsiteBackupConfigAndSubprocess()` (Test 13) in `tests/test_cipher.cpp` with 100% pass rate.
 
 ### Artifacts and Files Involved
 - [include/storage/BackupConfig.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/storage/BackupConfig.h)
@@ -592,6 +484,96 @@ The user directed the implementation of Option B (Subprocess Execution via OpenS
 - [src/main.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/main.cpp)
 - [tests/test_cipher.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_cipher.cpp)
 - [CMakeLists.txt](file:///home/palash/Documents/C++_miniProject/VaultSync/CMakeLists.txt)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 23: Chromium Extension Workflow & Implementation Roadmap
+
+### Summary of User Prompt
+The user inquired how to begin implementing the Chromium browser extension workflow from the architectural artifact, requesting concrete execution steps, extension ID determinism, and phase sequencing.
+
+### Key Architecture / Design Objectives
+- Establish 5-phase roadmap: deterministic RSA key identity, C++ native host binary, manifest registration, MV3 DOM autofill, and security hardening.
+- Guarantee static 32-character extension ID across machines using hardcoded RSA `"key"` field in `manifest.json`.
+- Implement zero-daemon native messaging over `stdin`/`stdout` using 4-byte little-endian length-prefixed JSON framing.
+
+### Orchestrator Actions & Results
+- Formulated phased implementation breakdown covering cryptographic key generation, native host binary, and MV3 extension frontend.
+- Provided OpenSSL workflow to derive 2048-bit RSA key pair, base64 public key, and canonical Chromium extension ID.
+- Outlined branch workflow on `feature/chromium-extension` and documented interaction in prompt execution history.
+
+### Artifacts and Files Involved
+- [chromium_extension_native_messaging_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/chromium_extension_native_messaging_plan.md)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 24: Chromium Extension Phase 1 & Phase 2 Technical Mechanics
+
+### Summary of User Prompt
+The user requested a detailed architectural breakdown of Phase 1 (Deterministic Identity via OpenSSL 2048-bit RSA keys and permanent 32-character extension ID derivation) and Phase 2 (C++ Native Messaging Host `vaultsync-host`, 4-byte length-prefix binary framing, JSON protocol, and `MasterVault` wiring), and instructed to document the prompt.
+
+### Key Architecture / Design Objectives
+- Explain RSA SubjectPublicKeyInfo encoding and Chromium base-16 `a-p` hashing for invariant extension IDs.
+- Detail POSIX `stdin`/`stdout` 4-byte little-endian length prefix framing, stream hygiene, and buffer flushing.
+- Map JSON protocol actions (`status`, `unlock`, `get_credentials`, `lock`) to `MasterVault` and memory scrubbing routines.
+
+### Orchestrator Actions & Results
+- Detailed the cryptographic derivation steps eliminating `allowed_origins` permission mismatches across machines.
+- Specified binary framing protocol, IPC packet lifecycle, and `stderr` stream isolation requirements.
+- Documented prompt interaction in prompt execution history without creating Git commits.
+
+### Artifacts and Files Involved
+- [chromium_extension_native_messaging_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/chromium_extension_native_messaging_plan.md)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 25: Phase 1 & Phase 2 Implementation — Deterministic Identity & Native Host
+
+### Summary of User Prompt
+implement the phases 1 and 2... (document the prompt as it is, not summary)
+
+### Key Architecture / Design Objectives
+- Generate 2048-bit RSA deterministic identity to lock static 32-character extension ID across environments.
+- Build C++ `vaultsync-host` binary length-prefix framing (`stdin`/`stdout`) with JSON protocol dispatching.
+- Wire native host to `MasterVault` cryptographic engine and implement automated unit test suite.
+
+### Orchestrator Actions & Results
+- Derived deterministic RSA key pair, generated `extension/manifest.json` and `com.vaultsync.native.json`.
+- Implemented `NativeHost` framing, action handlers (`status`, `unlock`, `get_credentials`, `lock`), and memory cleansing.
+- Configured CMake targets `vaultsync-host` and `test_native_host`; verified all 5 test suites pass 100%.
+
+### Artifacts and Files Involved
+- [extension/manifest.json](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/manifest.json)
+- [com.vaultsync.native.json](file:///home/palash/Documents/C++_miniProject/VaultSync/com.vaultsync.native.json)
+- [include/native_host/NativeHost.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/native_host/NativeHost.h)
+- [src/native_host/NativeHost.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/native_host/NativeHost.cpp)
+- [src/native_host/main.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/native_host/main.cpp)
+- [tests/test_native_host.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_native_host.cpp)
+- [CMakeLists.txt](file:///home/palash/Documents/C++_miniProject/VaultSync/CMakeLists.txt)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 26: CI/CD Standby Agent Provisioning & Dual-Workstream Orchestration
+
+### Summary of User Prompt
+spawn a new ao agent and give it relevant context and the artifact generated for CI CD integration, just provide the context and ask it to stay in standby mode after knowing the context. do NOT make changes just yet (and document this prompt) and continue with phase 1 and 2 in this instance
+
+### Key Architecture / Design Objectives
+- Isolate CI/CD integration responsibilities by provisioning a dedicated standby subagent with full VPS and reprepro context.
+- Prevent premature repository mutations or CI workflow changes while core Phase 1 & 2 features are being completed.
+- Maintain uninterrupted execution in parent orchestrator instance for native messaging implementation.
+
+### Orchestrator Actions & Results
+- Spawned `CI/CD Standby Specialist` subagent with `github_actions_ci_cd_plan.md` context and verified standby mode.
+- Retained core execution focus in parent orchestrator instance to deliver Phase 1 and 2 targets.
+- Documented prompt verbatim in prompt execution history.
+
+### Artifacts and Files Involved
+- [github_actions_ci_cd_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/github_actions_ci_cd_plan.md)
 - [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
 
 ---
@@ -617,5 +599,8 @@ Target Architecture Components (23 Sections)
 ├── [x] Packaging & Distribution: Debian (.deb) & Custom APT Repository Architecture
 ├── [x] Off-Site Backup Architecture: Tailscale Tailnet & SFTP Integration Plan
 ├── [x] Off-Site Backup Implementation: OpenSSH Subprocess (sftp), Batch Mode & FTXUI Tab
-└── [x] Browser Extension Integration: Native Messaging & Zero-Daemon IPC Architecture
+├── [x] Browser Extension Integration: Native Messaging & Zero-Daemon IPC Architecture
+├── [x] Chromium Extension Workflow: Deterministic RSA Identity & Phased Implementation Roadmap
+├── [x] Native Messaging Host Architecture: Binary Length Framing & JSON Protocol Mechanics
+└── [x] Native Host Implementation: vaultsync-host Binary, Framing & test_native_host Suite
 ```
