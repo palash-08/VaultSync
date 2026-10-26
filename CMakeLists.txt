@@ -257,7 +257,6 @@ if(INSTALL_SYSTEM_NATIVE_HOST_MANIFEST)
         DESTINATION /etc/opt/chrome/native-messaging-hosts
     )
 endif()
-
 install(FILES README.md architecture.md
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )
