@@ -10,6 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenSSL REQUIRED)
 
+include(FetchContent)
+include(GNUInstallDirs)
+
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)
     FetchContent_Declare(nlohmann_json
@@ -19,7 +22,6 @@ if(NOT nlohmann_json_FOUND)
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
-include(FetchContent)
 FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
     GIT_TAG v5.0.0
@@ -201,21 +203,63 @@ target_link_libraries(test_native_host PRIVATE
 add_test(NAME test_native_host COMMAND test_native_host)
 
 # -----------------------------------------------------------------------------
+# Native Messaging Host Manifest Configuration
+# -----------------------------------------------------------------------------
+set(NATIVE_HOST_NAME "com.vaultsync.native")
+set(NATIVE_HOST_EXTENSION_ID "fhmcpggbfoaaglijeknjdnpnehbpdajb")
+
+# Configure manifest for prefix installation
+set(NATIVE_HOST_PATH "${CMAKE_INSTALL_FULL_BINDIR}/vaultsync-host")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/com.vaultsync.native.json.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/com.vaultsync.native.json"
+    @ONLY
+)
+
+# Configure development manifest pointing to local build directory
+set(NATIVE_HOST_PATH "${CMAKE_CURRENT_BINARY_DIR}/vaultsync-host")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/com.vaultsync.native.json.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/com.vaultsync.native.dev.json"
+    @ONLY
+)
+
+# -----------------------------------------------------------------------------
 # Installation Rules
 # -----------------------------------------------------------------------------
 install(TARGETS vaultsync vaultsync-host
-    RUNTIME DESTINATION bin
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(FILES com.vaultsync.native.json
-    DESTINATION /etc/chromium/native-messaging-hosts
+# Install relocatable manifest to share/vaultsync/
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/com.vaultsync.native.json"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vaultsync"
 )
-install(FILES com.vaultsync.native.json
-    DESTINATION /etc/opt/chrome/native-messaging-hosts
+
+# Install user registration helper scripts
+install(PROGRAMS
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/register_host.sh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/unregister_host.sh"
+    DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+
+# Explicit option for system-wide manifest installation into /etc/ (requires root/sudo)
+option(INSTALL_SYSTEM_NATIVE_HOST_MANIFEST
+    "Install native messaging host manifest into system /etc directories for Chromium and Chrome"
+    OFF
+)
+
+if(INSTALL_SYSTEM_NATIVE_HOST_MANIFEST)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/com.vaultsync.native.json"
+        DESTINATION /etc/chromium/native-messaging-hosts
+    )
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/com.vaultsync.native.json"
+        DESTINATION /etc/opt/chrome/native-messaging-hosts
+    )
+endif()
 
 install(FILES README.md architecture.md
-    DESTINATION share/doc/vaultsync
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )
 
 # -----------------------------------------------------------------------------
