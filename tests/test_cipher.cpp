@@ -934,8 +934,10 @@ void testPhase2And3AuthorizationAndFlow() {
     // Add credentials for testing
     auto webCred = std::make_shared<WebCredential>("GitHub", "alice", "gh_secret_key_123", "personal token", "https://github.com");
     auto wifiCred = std::make_shared<WiFiCredential>("OfficeWiFi", "", "wifi_wpa3_pass", "hq", "OfficeNet_Secure", "WPA3");
-    assert(vault.addCredential(webCred));
-    assert(vault.addCredential(wifiCred));
+    bool addedWeb = vault.addCredential(webCred);
+    assert(addedWeb);
+    bool addedWifi = vault.addCredential(wifiCred);
+    assert(addedWifi);
     assert(vault.getCredentialCount() == 2);
 
     // 3. Lock vault completely (simulating fresh application launch)
@@ -1138,7 +1140,8 @@ void testPhase2And3AuthorizationAndFlow() {
     assert(vault.getCredentialCount() == 0 && "In-memory credential cache must be purged on timeout!");
 
     // Re-unlocking after inactivity timeout
-    assert(vault.unlockCredentials(credPass, credAttempts));
+    bool reUnlockOk = vault.unlockCredentials(credPass, credAttempts);
+    assert(reUnlockOk);
     assert(vault.getSessionState() == MasterVault::SessionState::CredentialsUnlocked);
     assert(vault.getCredentialCount() == 1);
 
@@ -1262,7 +1265,8 @@ void testOffsiteBackupConfigAndSubprocess() {
     configToSave.connectTimeout = 3;
 
     assert(configToSave.isValid() && "Populated config must be valid!");
-    assert(configToSave.saveToFile(testConfPath) && "Config saveToFile must return true!");
+    bool savedConf = configToSave.saveToFile(testConfPath);
+    assert(savedConf && "Config saveToFile must return true!");
     assert(fs::exists(testConfPath) && "Config file must exist on disk!");
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -1300,7 +1304,8 @@ void testOffsiteBackupConfigAndSubprocess() {
     pwConfigToSave.connectTimeout = 4;
 
     assert(pwConfigToSave.isValid());
-    assert(pwConfigToSave.saveToFile(testConfPath));
+    bool savedPwConf = pwConfigToSave.saveToFile(testConfPath);
+    assert(savedPwConf);
 
     BackupConfig loadedPwConfig = BackupConfig::loadFromFile(testConfPath);
     assert(loadedPwConfig.isValid());

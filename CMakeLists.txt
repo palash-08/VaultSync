@@ -110,6 +110,7 @@ target_include_directories(test_cipher PRIVATE
     include/ui
 )
 target_link_libraries(test_cipher PRIVATE OpenSSL::Crypto)
+target_compile_options(test_cipher PRIVATE -UNDEBUG)
 
 enable_testing()
 add_test(NAME test_cipher COMMAND test_cipher)
@@ -199,6 +200,7 @@ target_link_libraries(test_native_host PRIVATE
     OpenSSL::Crypto
     nlohmann_json::nlohmann_json
 )
+target_compile_options(test_native_host PRIVATE -UNDEBUG)
 
 add_test(NAME test_native_host COMMAND test_native_host)
 

@@ -296,7 +296,8 @@ void testMultiCredentialMatchingAndComplexDomains() {
             "Personal token",
             "https://github.com/personal"
         );
-        assert(mv.addCredential(cred1));
+        bool added1 = mv.addCredential(cred1);
+        assert(added1);
 
         // Credential 2: GitHub Work
         auto cred2 = std::make_shared<WebCredential>(
@@ -306,7 +307,8 @@ void testMultiCredentialMatchingAndComplexDomains() {
             "Enterprise account",
             "https://github.com/enterprise"
         );
-        assert(mv.addCredential(cred2));
+        bool added2 = mv.addCredential(cred2);
+        assert(added2);
 
         // Credential 3: GitLab
         auto cred3 = std::make_shared<WebCredential>(
@@ -316,7 +318,8 @@ void testMultiCredentialMatchingAndComplexDomains() {
             "GitLab account",
             "https://gitlab.com/login"
         );
-        assert(mv.addCredential(cred3));
+        bool added3 = mv.addCredential(cred3);
+        assert(added3);
     }
 
     NativeHost host;
@@ -378,17 +381,31 @@ void testSubprocessHostBinaryIPC() {
         binPath = "./vaultsync-host";
     } else if (fs::exists("../build/vaultsync-host")) {
         binPath = "../build/vaultsync-host";
+    } else {
+        std::error_code ec;
+        fs::path selfDir = fs::canonical("/proc/self/exe", ec).parent_path();
+        if (!ec && fs::exists(selfDir / "vaultsync-host")) {
+            binPath = (selfDir / "vaultsync-host").string();
+        }
     }
-    assert(!binPath.empty() && "vaultsync-host binary not found");
 
-    int inPipe[2];   // parent -> child (child's stdin)
-    int outPipe[2];  // child -> parent (child's stdout)
+    if (binPath.empty()) {
+        throw std::runtime_error("vaultsync-host binary not found");
+    }
 
-    assert(pipe(inPipe) == 0 && "Failed to create inPipe");
-    assert(pipe(outPipe) == 0 && "Failed to create outPipe");
+    int inPipe[2] = {-1, -1};   // parent -> child (child's stdin)
+    int outPipe[2] = {-1, -1};  // child -> parent (child's stdout)
+
+    if (pipe(inPipe) != 0 || pipe(outPipe) != 0) {
+        throw std::runtime_error("Failed to create POSIX pipes for subprocess test");
+    }
 
     pid_t pid = fork();
-    assert(pid >= 0 && "Failed to fork child process");
+    if (pid < 0) {
+        close(inPipe[0]); close(inPipe[1]);
+        close(outPipe[0]); close(outPipe[1]);
+        throw std::runtime_error("Failed to fork child process");
+    }
 
     if (pid == 0) {
         // Child process
@@ -414,22 +431,40 @@ void testSubprocessHostBinaryIPC() {
     std::string req = R"({"action":"status"})";
     uint32_t reqLen = static_cast<uint32_t>(req.size());
     ssize_t bytesWritten = write(inPipe[1], &reqLen, sizeof(reqLen));
-    assert(bytesWritten == sizeof(reqLen));
+    if (bytesWritten != static_cast<ssize_t>(sizeof(reqLen))) {
+        close(inPipe[1]); close(outPipe[0]);
+        throw std::runtime_error("Failed to write request length to child stdin");
+    }
     bytesWritten = write(inPipe[1], req.data(), req.size());
-    assert(bytesWritten == static_cast<ssize_t>(req.size()));
+    if (bytesWritten != static_cast<ssize_t>(req.size())) {
+        close(inPipe[1]); close(outPipe[0]);
+        throw std::runtime_error("Failed to write request payload to child stdin");
+    }
 
     // Read 4-byte response header
     uint32_t respLen = 0;
     ssize_t bytesRead = read(outPipe[0], &respLen, sizeof(respLen));
-    assert(bytesRead == sizeof(respLen) && "Failed to read 4-byte response length");
-    assert(respLen > 0 && respLen <= NativeHost::MAX_MESSAGE_SIZE);
+    if (bytesRead != static_cast<ssize_t>(sizeof(respLen)) || respLen == 0 || respLen > NativeHost::MAX_MESSAGE_SIZE) {
+        close(inPipe[1]);
+        close(outPipe[0]);
+        int status = 0;
+        waitpid(pid, &status, 0);
+        throw std::runtime_error("Failed to read valid response length header from subprocess host (bytesRead=" +
+                                 std::to_string(bytesRead) + ", respLen=" + std::to_string(respLen) + ")");
+    }
 
     // Read response payload
     std::string respData(respLen, '\0');
     size_t totalRead = 0;
     while (totalRead < respLen) {
         ssize_t r = read(outPipe[0], &respData[totalRead], respLen - totalRead);
-        assert(r > 0 && "Unexpected EOF or read error from child");
+        if (r <= 0) {
+            close(inPipe[1]);
+            close(outPipe[0]);
+            int status = 0;
+            waitpid(pid, &status, 0);
+            throw std::runtime_error("Unexpected EOF or read error from child subprocess host");
+        }
         totalRead += r;
     }
 
@@ -444,7 +479,9 @@ void testSubprocessHostBinaryIPC() {
 
     int status = 0;
     waitpid(pid, &status, 0);
-    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0 && "Child did not exit cleanly");
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        throw std::runtime_error("Child host process failed or exited with status " + std::to_string(WEXITSTATUS(status)));
+    }
 
     std::cout << "  ✓ Subprocess binary IPC over standard POSIX streams verified" << std::endl;
 }
