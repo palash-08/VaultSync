@@ -36,6 +36,8 @@ This document chronicles the prompt interactions, architectural directives, and 
 | **Prompt 27** | Phase 4: Extension Frontend & DOM Autofill Implementation | Orchestrator (`feature/off-site_backups`) | Implemented MV3 background message routing, content script form detection, inline badge rendering, synthetic bubbling autofill, and popup UI. | `background.js`, `content.js/.css`, `popup.html/.js` |
 | **Prompt 28** | Phase 5: End-to-End Verification & Security Hardening | Orchestrator (`feature/off-site_backups`) | Implemented inactivity auto-lock, basic-auth URL normalization, POSIX subprocess binary IPC test, and interactive HTML test bench. | `test_native_host.cpp`, `NativeHost.cpp`, `test_login_page.html`, `TerminalUtils.cpp` |
 | **Prompt 29** | Off-Site Backup SFTP Password & Key Auth Selection | Orchestrator (`feature/off-site_backups`) | Implemented password/key authentication selection for SFTP backups with OpenSSH SSH_ASKPASS support and FTXUI Tab 4 UI. | `BackupConfig.h/.cpp`, `SftpSubprocessClient.cpp`, `src/main.cpp`, `test_cipher.cpp` |
+| **Prompt 30** | Task CI/CD Standby Agent with GitHub Actions | Orchestrator (`feature/off-site_backups`) | Dispatched GitHub Actions implementation directive to standby agent and analyzed session mode constraints. | `ao send`, `transcript.jsonl` |
+| **Prompt 31** | GitHub Actions CI/CD & Automated APT Deployment Implementation | Orchestrator (`feature/off-site_backups`) | Created and verified `.github/workflows/ci.yml` and `release.yml` with CPack packaging, GitHub Releases, and remote reprepro publication. | `.github/workflows/ci.yml`, `.github/workflows/release.yml` |
 
 ---
 
@@ -657,6 +659,50 @@ in the off-site backup function... I should be able to sftp via password as well
 
 ---
 
+## Prompt 30: CI/CD Standby Agent Tasking & Workflow Orchestration
+
+### Summary of User Prompt
+ask the CI - CD Standby agent to implement the github actions workflow (document this prompt as is)
+
+### Key Architecture / Design Objectives
+- Transition CI/CD standby agent (`vaultsync-9`) from idle standby into active implementation.
+- Delegate generation of GitHub Actions CI test runner and CD automated Debian packaging release workflows.
+- Coordinate between orchestrator session and dedicated CI/CD agent workspace.
+
+### Orchestrator Actions & Results
+- Dispatched task assignment to `vaultsync-9` targeting `.github/workflows/ci.yml` and `release.yml`.
+- Diagnosed session mode boundary (`SESSION_MODE_MISMATCH` between TUI pty-host and chat API).
+- Prepared repository context and implementation artifacts to ensure zero workflow delay.
+
+### Artifacts and Files Involved
+- [github_actions_ci_cd_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/github_actions_ci_cd_plan.md)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 31: GitHub Actions CI/CD Pipeline Implementation
+
+### Summary of User Prompt
+implement CI - CD using github actions workflow
+
+### Key Architecture / Design Objectives
+- Establish automated Continuous Integration (`ci.yml`) validating CMake builds, dependencies, and CTest test suites on pushes/PRs.
+- Establish Continuous Deployment (`release.yml`) triggered on version tags (`v*.*.*`) building `.deb` packages via CPack, generating SHA256 checksums, and publishing GitHub Releases.
+- Implement automated remote APT repository deployment uploading `.deb` to VPS `/srv/apt-repo` via SSH and invoking `reprepro includedeb stable`.
+
+### Orchestrator Actions & Results
+- Created `.github/workflows/ci.yml` configuring CMake Release build with Ninja, OpenSSL, and executing all CTest suites.
+- Created `.github/workflows/release.yml` with tag version extraction, CPack Debian packaging, GitHub Release publishing, and secure SSH/reprepro VPS deployment.
+- Validated YAML syntax across both workflow manifests and synchronized files across active worktrees.
+
+### Artifacts and Files Involved
+- [.github/workflows/ci.yml](file:///home/palash/Documents/C++_miniProject/VaultSync/.github/workflows/ci.yml)
+- [.github/workflows/release.yml](file:///home/palash/Documents/C++_miniProject/VaultSync/.github/workflows/release.yml)
+- [github_actions_ci_cd_plan.md](file:///home/palash/.gemini/antigravity-cli/brain/a7b6fd37-e0f7-4c91-8ca2-7809e6bba520/github_actions_ci_cd_plan.md)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
 ## Summary of Completed Architecture Coverage
 
 ```text
@@ -683,5 +729,6 @@ Target Architecture Components (23 Sections)
 ├── [x] Native Messaging Host Architecture: Binary Length Framing & JSON Protocol Mechanics
 ├── [x] Native Host Implementation: vaultsync-host Binary, Framing & test_native_host Suite
 ├── [x] Extension Frontend & Autofill: MV3 Service Worker, DOM Injection & Action Popup
-└── [x] E2E Verification & Hardening: Inactivity Auto-Lock, Subprocess IPC Tests & Test Bench
+├── [x] E2E Verification & Hardening: Inactivity Auto-Lock, Subprocess IPC Tests & Test Bench
+└── [x] CI/CD Automation: GitHub Actions CI Matrix, CPack .deb Release & reprepro APT Publication
 ```

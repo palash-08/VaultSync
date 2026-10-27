@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "feature/**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build & Run Test Suites
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            libssl-dev \
+            dpkg-dev
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DINSTALL_SYSTEM_NATIVE_HOST_MANIFEST=ON
+
+      - name: Compile VaultSync & Test Binaries
+        run: |
+          cmake --build build -j$(nproc)
+
+      - name: Run Automated Test Suites (CTest)
+        run: |
+          ctest --test-dir build --output-on-failure

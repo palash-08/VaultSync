@@ -1,0 +1,120 @@
+name: Release & Publish to APT
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Build, Package (.deb), Release & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Extract Tag Version
+        id: get_version
+        run: |
+          if [ -n "${GITHUB_REF_NAME}" ] && [[ "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="1.0.0"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building VaultSync Version: ${VERSION}"
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            libssl-dev \
+            dpkg-dev
+
+      - name: Configure CMake with Tagged Version
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DINSTALL_SYSTEM_NATIVE_HOST_MANIFEST=ON \
+            -DCPACK_PACKAGE_VERSION=${{ steps.get_version.outputs.VERSION }}
+
+      - name: Build Executables & Run Verification Tests
+        run: |
+          cmake --build build -j$(nproc)
+          ctest --test-dir build --output-on-failure
+
+      - name: Package Debian Package via CPack
+        run: |
+          cd build
+          cpack -G DEB
+          ls -la *.deb
+
+      - name: Calculate Checksums
+        run: |
+          cd build
+          sha256sum *.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/*.deb
+            build/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      - name: Setup SSH for VPS Deployment
+        if: ${{ env.SSH_PRIVATE_KEY != '' }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add VPS to Known Hosts
+        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_PRIVATE_KEY != '' }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H -p ${{ secrets.SSH_PORT || 22 }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Upload .deb Package to VPS
+        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_PRIVATE_KEY != '' }}
+        run: |
+          PORT="${{ secrets.SSH_PORT || 22 }}"
+          scp -P ${PORT} build/*.deb ${{ secrets.SSH_USER || 'ubuntu' }}@${{ secrets.SSH_HOST }}:/tmp/
+
+      - name: Publish Package in reprepro on VPS
+        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_PRIVATE_KEY != '' }}
+        run: |
+          PORT="${{ secrets.SSH_PORT || 22 }}"
+          ssh -p ${PORT} ${{ secrets.SSH_USER || 'ubuntu' }}@${{ secrets.SSH_HOST }} << 'EOF'
+            set -euo pipefail
+            
+            # Find the uploaded deb package in /tmp
+            DEB_FILE=$(ls /tmp/vaultsync_*.deb | head -n 1)
+            echo "Processing ${DEB_FILE} into reprepro..."
+            
+            # Add package to stable distribution in /srv/apt-repo
+            # reprepro automatically signs the Release file using the local GPG key configured in /srv/apt-repo/conf/distributions
+            reprepro -b /srv/apt-repo includedeb stable "${DEB_FILE}"
+            
+            # Cleanup temporary file
+            rm -f "${DEB_FILE}"
+            echo "Successfully published to reprepro repository!"
+          EOF
+
+      - name: Verify Live APT Repository
+        if: ${{ secrets.SSH_HOST != '' && secrets.SSH_PRIVATE_KEY != '' }}
+        run: |
+          echo "Verifying live repository InRelease..."
+          curl -fsSL "https://apt.palash.pro/dists/stable/InRelease" | head -n 15
