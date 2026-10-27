@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaultSync Companion</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 340px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #181825;
+      color: #cdd6f4;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background-color: #1e1e2e;
+      border-bottom: 1px solid #313244;
+    }
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+    }
+    .title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #cdd6f4;
+      letter-spacing: 0.3px;
+    }
+    .status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background-color: #313244;
+      color: #a6adc8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-badge.unlocked {
+      background-color: rgba(166, 227, 161, 0.15);
+      color: #a6e3a1;
+      border: 1px solid rgba(166, 227, 161, 0.3);
+    }
+    .status-badge.locked {
+      background-color: rgba(243, 139, 168, 0.15);
+      color: #f38ba8;
+      border: 1px solid rgba(243, 139, 168, 0.3);
+    }
+    /* Domain Subheader */
+    .domain-bar {
+      padding: 8px 16px;
+      background-color: #11111b;
+      font-size: 11px;
+      color: #89b4fa;
+      border-bottom: 1px solid #313244;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .container {
+      padding: 16px;
+    }
+    /* Form Styles */
+    .form-group {
+      margin-bottom: 12px;
+    }
+    .form-label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #a6adc8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .form-input {
+      width: 100%;
+      padding: 8px 10px;
+      background-color: #1e1e2e;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .form-input:focus {
+      border-color: #89b4fa;
+    }
+    /* Buttons */
+    .btn {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-primary {
+      background-color: #89b4fa;
+      color: #11111b;
+    }
+    .btn-primary:hover {
+      background-color: #b4befe;
+    }
+    .btn-secondary {
+      background-color: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+    }
+    .btn-secondary:hover {
+      background-color: #45475a;
+    }
+    .btn-danger {
+      background-color: rgba(243, 139, 168, 0.15);
+      color: #f38ba8;
+      border: 1px solid rgba(243, 139, 168, 0.3);
+      margin-top: 12px;
+    }
+    .btn-danger:hover {
+      background-color: rgba(243, 139, 168, 0.25);
+    }
+    .btn-small {
+      width: auto;
+      padding: 5px 10px;
+      font-size: 11px;
+    }
+    /* Alert Messages */
+    .alert {
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-bottom: 12px;
+      display: none;
+    }
+    .alert-error {
+      background-color: rgba(243, 139, 168, 0.15);
+      color: #f38ba8;
+      border: 1px solid rgba(243, 139, 168, 0.3);
+    }
+    .alert-success {
+      background-color: rgba(166, 227, 161, 0.15);
+      color: #a6e3a1;
+      border: 1px solid rgba(166, 227, 161, 0.3);
+    }
+    /* Credential List */
+    .cred-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .cred-card {
+      background-color: #1e1e2e;
+      border: 1px solid #313244;
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .cred-meta {
+      overflow: hidden;
+    }
+    .cred-user {
+      font-weight: 600;
+      color: #cdd6f4;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .cred-service {
+      font-size: 11px;
+      color: #9399b2;
+    }
+    .cred-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 20px 0;
+      color: #9399b2;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo-group">
+      <img src="icons/icon-48.png" alt="VaultSync" class="logo-icon">
+      <span class="title">VaultSync</span>
+    </div>
+    <span id="vault-status-badge" class="status-badge locked">Locked</span>
+  </div>
+
+  <div class="domain-bar">
+    <span>🌐</span>
+    <span id="active-domain-text">Detecting active tab...</span>
+  </div>
+
+  <div class="container">
+    <div id="alert-box" class="alert alert-error"></div>
+
+    <!-- View A: Locked Vault State -->
+    <div id="locked-view">
+      <div class="form-group">
+        <label class="form-label" for="input-user">Vault User</label>
+        <input type="text" id="input-user" class="form-input" placeholder="e.g. alice">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="input-master-pass">Master Password</label>
+        <input type="password" id="input-master-pass" class="form-input" placeholder="••••••••">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="input-cred-pass">Credential Password</label>
+        <input type="password" id="input-cred-pass" class="form-input" placeholder="••••••••">
+      </div>
+      <button type="button" id="btn-unlock" class="btn btn-primary">
+        Unlock Vault
+      </button>
+    </div>
+
+    <!-- View B: Unlocked State with Credentials -->
+    <div id="unlocked-view" style="display: none;">
+      <div id="credentials-container" class="cred-list">
+        <!-- Rendered dynamically -->
+      </div>
+      <button type="button" id="btn-lock" class="btn btn-danger">
+        Lock Vault
+      </button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

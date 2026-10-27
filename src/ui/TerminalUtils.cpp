@@ -64,7 +64,7 @@ bool tryPipeCommand(const std::string& bin, const std::string& cmd, const std::s
         return false;
     }
     SigPipeGuard guard;
-    std::string fullCmd = "PATH=\"$HOME/.local/bin:$PATH\" " + cmd;
+    std::string fullCmd = "PATH=\"$HOME/.local/bin:$PATH\" " + cmd + " >/dev/null 2>&1";
     FILE* pipe = popen(fullCmd.c_str(), "w");
     if (!pipe) return false;
     size_t written = fwrite(text.data(), 1, text.size(), pipe);

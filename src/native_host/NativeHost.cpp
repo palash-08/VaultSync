@@ -78,6 +78,12 @@ std::string NativeHost::extractDomain(const std::string& url) {
         s = s.substr(protoPos + 3);
     }
 
+    // Strip basic auth credentials (user:pass@) if present
+    size_t atPos = s.find('@');
+    if (atPos != std::string::npos) {
+        s = s.substr(atPos + 1);
+    }
+
     size_t slashPos = s.find('/');
     if (slashPos != std::string::npos) {
         s = s.substr(0, slashPos);
@@ -117,6 +123,12 @@ std::string NativeHost::handleMessage(const std::string& requestJson) {
 
     std::string action = req.value("action", "");
 
+    // Enforce inactivity timeout: auto-lock and purge secrets if idle threshold exceeded
+    if (vault.checkInactivityTimeout()) {
+        cleanseString(cachedCredPassword);
+        activeUser.clear();
+    }
+
     if (action == "status") {
         std::string user = req.value("user", activeUser);
         if (user.empty()) {
@@ -143,7 +155,19 @@ std::string NativeHost::handleMessage(const std::string& requestJson) {
             {"state", stateStr},
             {"user", user},
             {"vault_exists", vaultExists},
-            {"has_credential_password", vault.hasCredentialPassword()}
+            {"has_credential_password", vault.hasCredentialPassword()},
+            {"inactivity_timeout_seconds", vault.getInactivityTimeout()}
+        };
+        return resp.dump();
+    }
+
+    if (action == "set_timeout") {
+        int timeoutSeconds = req.value("timeout_seconds", req.value("timeout", 300));
+        vault.setInactivityTimeout(timeoutSeconds);
+        nlohmann::json resp = {
+            {"success", true},
+            {"action", "set_timeout"},
+            {"timeout_seconds", timeoutSeconds}
         };
         return resp.dump();
     }
@@ -218,6 +242,8 @@ std::string NativeHost::handleMessage(const std::string& requestJson) {
             cleanseString(credPassword);
         }
 
+        vault.recordActivity();
+
         std::string stateStr = (vault.getSessionState() == MasterVault::SessionState::CredentialsUnlocked)
             ? "CredentialsUnlocked"
             : "MasterAuthenticated";
@@ -240,6 +266,8 @@ std::string NativeHost::handleMessage(const std::string& requestJson) {
             };
             return err.dump();
         }
+
+        vault.recordActivity();
 
         std::string rawUrl = req.value("domain", req.value("url", ""));
         std::string targetDomain = extractDomain(rawUrl);

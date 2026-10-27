@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "description": "Secure on-demand credential autofill powered by VaultSync C++ Native Messaging",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA22MFJtmVht9TjfDNQQ6P7BD4Tg6AtHqEPKybWZUPWLHPxpCU9JB4Aas5+aN7C8/pE1o6wK5OElFXUzDondbkFeTXrNIBc9zgqnbiUHFe9OEiR130tpgIOFUX4gYa7/EgtPAu6koe67g2TmMPBzBkZxDys4AqmK4Q6ku1Q32X+moCl+V0dpCdPQqHOjbssY8bFP2DwH87/DPp5Ojc6JGvRG9n+OaFL4mGAI32vCvSdrLmZb1AYx5SosZhdAwcE2KzgLIPcEejsXYPVqiaURn4w3axgE/PHOoj1HEv/UoTTBvOXgfGDAMrYWxlmK8UNYWmRfyz3qyw9ehriAojWS6xQwIDAQAB",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "nativeMessaging",
     "activeTab",
@@ -16,10 +21,23 @@
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": ["content.js"],
+      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "VaultSync"
-  }
+    "default_title": "VaultSync",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*", "content.css"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
 }

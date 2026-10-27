@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaultSync Extension DOM Autofill Test Bench</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --card-bg: #181825;
+      --surface: #313244;
+      --text: #cdd6f4;
+      --subtext: #a6adc8;
+      --accent: #89b4fa;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --yellow: #f9e2af;
+      --border: #45475a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 40px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 760px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    header h1 {
+      font-size: 24px;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    header p {
+      font-size: 14px;
+      color: var(--subtext);
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .card h2 {
+      font-size: 18px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card p.desc {
+      font-size: 13px;
+      color: var(--subtext);
+      margin-bottom: 16px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+      position: relative;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--subtext);
+      margin-bottom: 6px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .form-group input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.25);
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #11111b;
+    }
+
+    .btn-primary:hover {
+      background: #b4befe;
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+
+    .btn-clear {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid var(--red);
+      font-size: 12px;
+      padding: 6px 12px;
+    }
+
+    .btn-clear:hover {
+      background: rgba(243, 139, 168, 0.1);
+    }
+
+    .button-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    #event-log {
+      height: 160px;
+      overflow-y: auto;
+      background: #11111b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--subtext);
+    }
+
+    .log-entry {
+      margin-bottom: 4px;
+    }
+
+    .log-tag {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-right: 6px;
+    }
+
+    .log-input { background: #313244; color: var(--accent); }
+    .log-change { background: #313244; color: var(--green); }
+    .log-dom { background: #313244; color: var(--yellow); }
+
+    .status-pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--surface);
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>VaultSync Extension DOM Autofill Test Bench</h1>
+      <p>Interactive verification fixture for DOM observation, field badges, and synthetic event propagation.</p>
+    </header>
+
+    <!-- Static Login Form Section -->
+    <div class="card">
+      <h2>1. Static Login Form <span class="status-pill">Standard DOM</span></h2>
+      <p class="desc">Tests immediate page-load badge attachment, autofill injection, and credential dropdown.</p>
+
+      <form id="static-form" onsubmit="event.preventDefault();">
+        <div class="form-group">
+          <label for="static-username">Username / Email</label>
+          <input type="text" id="static-username" name="username" placeholder="name@example.com" autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <label for="static-password">Password</label>
+          <input type="password" id="static-password" name="password" placeholder="••••••••••••" autocomplete="current-password">
+        </div>
+
+        <div class="button-row">
+          <button type="submit" class="btn btn-primary">Sign In (Test Submit)</button>
+          <button type="button" class="btn btn-secondary" id="btn-clear-static">Clear Fields</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Dynamic SPA Login Form Section -->
+    <div class="card">
+      <h2>2. Dynamic SPA Form Injection <span class="status-pill">MutationObserver</span></h2>
+      <p class="desc">Simulates Single-Page App (React/Vue/Angular) modal injection to verify MutationObserver detection.</p>
+
+      <div class="button-row" style="margin-bottom: 16px;">
+        <button type="button" class="btn btn-primary" id="btn-inject-spa">Inject Dynamic SPA Login</button>
+        <button type="button" class="btn btn-secondary" id="btn-remove-spa">Remove SPA Form</button>
+      </div>
+
+      <div id="spa-container"></div>
+    </div>
+
+    <!-- Live Event Monitor -->
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2>3. Reactive Event Monitor <span class="status-pill">Bubbling Verification</span></h2>
+        <button type="button" class="btn btn-clear" id="btn-clear-log">Clear Log</button>
+      </div>
+      <p class="desc">Verifies synthetic bubbling <code>input</code> and <code>change</code> events triggered during autofill.</p>
+      <div id="event-log"></div>
+    </div>
+  </div>
+
+  <script>
+    const eventLog = document.getElementById("event-log");
+
+    function logEvent(tag, message, tagClass = "log-input") {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(" ")[0] + "." + String(now.getMilliseconds()).padStart(3, "0");
+      const div = document.createElement("div");
+      div.className = "log-entry";
+      div.innerHTML = `<span style="color: #6c7086;">[${timeStr}]</span> <span class="log-tag ${tagClass}">${tag}</span> ${message}`;
+      eventLog.appendChild(div);
+      eventLog.scrollTop = eventLog.scrollHeight;
+    }
+
+    // Attach listeners to element
+    function trackEvents(element, name) {
+      if (!element) return;
+      element.addEventListener("input", (e) => {
+        const masked = element.type === "password" ? "*".repeat(element.value.length) : element.value;
+        logEvent("input", `${name} value: "${masked}" (bubbles: ${e.bubbles})`, "log-input");
+      });
+      element.addEventListener("change", (e) => {
+        const masked = element.type === "password" ? "*".repeat(element.value.length) : element.value;
+        logEvent("change", `${name} committed: "${masked}" (bubbles: ${e.bubbles})`, "log-change");
+      });
+    }
+
+    // Track static fields
+    trackEvents(document.getElementById("static-username"), "static-username");
+    trackEvents(document.getElementById("static-password"), "static-password");
+
+    // Clear static inputs
+    document.getElementById("btn-clear-static").addEventListener("click", () => {
+      document.getElementById("static-username").value = "";
+      document.getElementById("static-password").value = "";
+      logEvent("dom", "Cleared static form fields", "log-dom");
+    });
+
+    // Clear log
+    document.getElementById("btn-clear-log").addEventListener("click", () => {
+      eventLog.innerHTML = "";
+    });
+
+    // Dynamic SPA Injection
+    const spaContainer = document.getElementById("spa-container");
+    document.getElementById("btn-inject-spa").addEventListener("click", () => {
+      spaContainer.innerHTML = `
+        <div style="padding: 16px; border: 1px dashed var(--accent); border-radius: 8px; margin-top: 8px;">
+          <h3 style="font-size: 14px; margin-bottom: 12px; color: var(--accent);">Dynamically Injected Modal</h3>
+          <form id="dynamic-form" onsubmit="event.preventDefault();">
+            <div class="form-group">
+              <label for="spa-username">SPA Username</label>
+              <input type="text" id="spa-username" name="spa_user" placeholder="spa_user@domain.com" autocomplete="username">
+            </div>
+            <div class="form-group">
+              <label for="spa-password">SPA Password</label>
+              <input type="password" id="spa-password" name="spa_pass" placeholder="••••••••••••" autocomplete="current-password">
+            </div>
+          </form>
+        </div>
+      `;
+      trackEvents(document.getElementById("spa-username"), "spa-username");
+      trackEvents(document.getElementById("spa-password"), "spa-password");
+      logEvent("dom", "Dynamically inserted SPA form into DOM", "log-dom");
+    });
+
+    document.getElementById("btn-remove-spa").addEventListener("click", () => {
+      spaContainer.innerHTML = "";
+      logEvent("dom", "Removed dynamic SPA form", "log-dom");
+    });
+
+    logEvent("dom", "Test bench initialized and ready.", "log-dom");
+  </script>
+</body>
+</html>

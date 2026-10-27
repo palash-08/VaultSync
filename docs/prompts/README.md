@@ -33,6 +33,8 @@ This document chronicles the prompt interactions, architectural directives, and 
 | **Prompt 24** | Chromium Extension Phase 1 & 2 Technical Deep Dive | Orchestrator (Internal) | Detailed mechanics of Phase 1 (OpenSSL RSA key derivation, extension ID mapping) and Phase 2 (4-byte binary framing, JSON protocol, MasterVault wiring). | Technical explanation & prompt log |
 | **Prompt 25** | Phase 1 & 2 Implementation: Deterministic Identity & Native Host | Orchestrator (`feature/off-site_backups`) | Implemented deterministic RSA extension key pair, manifest V3 with fixed ID, C++ `vaultsync-host` binary framing, JSON protocol, and test suite. | `NativeHost.h/.cpp`, `main.cpp`, `test_native_host.cpp` |
 | **Prompt 26** | CI/CD Standby Agent Provisioning & Orchestrator Execution | Orchestrator (`feature/off-site_backups`) | Spawned CI/CD standby subagent with full VPS reprepro context; continued Phase 1 & 2 implementation in parent orchestrator. | Subagent `CI/CD Standby Specialist` |
+| **Prompt 27** | Phase 4: Extension Frontend & DOM Autofill Implementation | Orchestrator (`feature/off-site_backups`) | Implemented MV3 background message routing, content script form detection, inline badge rendering, synthetic bubbling autofill, and popup UI. | `background.js`, `content.js/.css`, `popup.html/.js` |
+| **Prompt 28** | Phase 5: End-to-End Verification & Security Hardening | Orchestrator (`feature/off-site_backups`) | Implemented inactivity auto-lock, basic-auth URL normalization, POSIX subprocess binary IPC test, and interactive HTML test bench. | `test_native_host.cpp`, `NativeHost.cpp`, `test_login_page.html`, `TerminalUtils.cpp` |
 
 ---
 
@@ -578,6 +580,57 @@ spawn a new ao agent and give it relevant context and the artifact generated for
 
 ---
 
+## Prompt 27: Phase 4 — Extension Frontend & DOM Autofill
+
+### Summary of User Prompt
+proceed with phase 4: Extension Frontend & DOM Autofill (document this prompt as is)
+
+### Key Architecture / Design Objectives
+- Implement MV3 background service worker routing between content scripts, popup UI, and C++ native host.
+- Build DOM observation (`MutationObserver`) with inline badge injection and bubbling synthetic events for SPA autofill.
+- Construct modern dark-themed action popup (`popup.html`/`popup.js`) for vault unlock, domain lookup, and manual autofill.
+
+### Orchestrator Actions & Results
+- Configured `manifest.json` with popup, styling, accessible resources, and generated 16/48/128px PNG icons.
+- Implemented `content.js` and `content.css` supporting single-click autofill and multi-credential floating dropdowns.
+- Created `popup.html` and `popup.js` supporting active domain filtering, unlock form, and clipboard copy.
+
+### Artifacts and Files Involved
+- [extension/manifest.json](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/manifest.json)
+- [extension/background.js](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/background.js)
+- [extension/content.js](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/content.js)
+- [extension/content.css](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/content.css)
+- [extension/popup.html](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/popup.html)
+- [extension/popup.js](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/popup.js)
+- [extension/icons/icon-48.png](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/icons/icon-48.png)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 28: Phase 5 — End-to-End Verification & Security Hardening
+
+### Summary of User Prompt
+the last phase 5... wrap it up and make sure no flow is broken
+
+### Key Architecture / Design Objectives
+- Harden C++ Native Host with auto-lock inactivity timeouts, activity tracking, and URL basic-auth stripping.
+- Expand test suite to verify subprocess binary execution via POSIX pipes (`pipe()`, `fork()`, `execvp()`), multi-account domain matching, and auto-lock state transitions.
+- Deliver standalone DOM test fixture (`test_login_page.html`) and verify zero regression across all TUI, crypto, and packaging pipelines.
+
+### Orchestrator Actions & Results
+- Wired inactivity timeout auto-lock and basic-auth URL normalization into `NativeHost.cpp`, resolving pipe-holding in `TerminalUtils.cpp`.
+- Expanded `test_native_host.cpp` from 5 to 8 test suites, validating real `vaultsync-host` subprocess execution and dual-tier auto-lock.
+- Verified 100% CTest pass rate (15/15 `test_cipher`, 8/8 `test_native_host`), validated extension JS syntax, and authored `test_login_page.html`.
+
+### Artifacts and Files Involved
+- [src/native_host/NativeHost.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/native_host/NativeHost.cpp)
+- [tests/test_native_host.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_native_host.cpp)
+- [src/ui/TerminalUtils.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/ui/TerminalUtils.cpp)
+- [extension/test_login_page.html](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/test_login_page.html)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
 ## Summary of Completed Architecture Coverage
 
 ```text
@@ -602,5 +655,7 @@ Target Architecture Components (23 Sections)
 ├── [x] Browser Extension Integration: Native Messaging & Zero-Daemon IPC Architecture
 ├── [x] Chromium Extension Workflow: Deterministic RSA Identity & Phased Implementation Roadmap
 ├── [x] Native Messaging Host Architecture: Binary Length Framing & JSON Protocol Mechanics
-└── [x] Native Host Implementation: vaultsync-host Binary, Framing & test_native_host Suite
+├── [x] Native Host Implementation: vaultsync-host Binary, Framing & test_native_host Suite
+├── [x] Extension Frontend & Autofill: MV3 Service Worker, DOM Injection & Action Popup
+└── [x] E2E Verification & Hardening: Inactivity Auto-Lock, Subprocess IPC Tests & Test Bench
 ```
