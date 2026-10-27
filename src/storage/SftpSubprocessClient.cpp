@@ -2,9 +2,11 @@
 
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <vector>
 #include <algorithm>
@@ -96,6 +98,13 @@ SftpSubprocessClient::BackupResult SftpSubprocessClient::executeBackup(const std
         return result;
     }
 
+    if (config.authMethod == BackupConfig::AuthMethod::Password && config.password.empty()) {
+        result.success = false;
+        result.exitCode = -1;
+        result.message = "SFTP password is required for password authentication.";
+        return result;
+    }
+
     std::string target = config.user.empty() ? config.host : (config.user + "@" + config.host);
     result.destination = target;
 
@@ -105,6 +114,42 @@ SftpSubprocessClient::BackupResult SftpSubprocessClient::executeBackup(const std
     result.remoteFile = timestampedFile;
 
     std::string batchScript = generateBatchScript(localVaultPath, config.remoteDir, stem, timestamp);
+
+    // Prepare temporary askpass script if password authentication is requested
+    std::string askpassScriptPath;
+    if (config.authMethod == BackupConfig::AuthMethod::Password) {
+        std::string runDir = "/tmp";
+        const char* xdgRun = std::getenv("XDG_RUNTIME_DIR");
+        if (xdgRun && fs::exists(xdgRun)) {
+            runDir = xdgRun;
+        } else if (fs::exists("/dev/shm")) {
+            runDir = "/dev/shm";
+        }
+        askpassScriptPath = runDir + "/vaultsync-askpass-" + std::to_string(::getpid()) + ".sh";
+
+        std::ofstream scriptFile(askpassScriptPath, std::ios::trunc);
+        if (!scriptFile.is_open()) {
+            result.success = false;
+            result.exitCode = -1;
+            result.message = "Failed to create temporary askpass helper script.";
+            return result;
+        }
+        scriptFile << "#!/bin/sh\n";
+        scriptFile << "exec printf '%s\\n' \"$VAULTSYNC_SSH_PASSWORD\"\n";
+        scriptFile.close();
+
+        ::chmod(askpassScriptPath.c_str(), S_IRWXU); // 0700
+    }
+
+    struct FileCleanupGuard {
+        std::string path;
+        ~FileCleanupGuard() {
+            if (!path.empty()) {
+                std::error_code ec;
+                fs::remove(path, ec);
+            }
+        }
+    } cleanupGuard{askpassScriptPath};
 
     int stdinPipe[2];
     int outPipe[2];
@@ -155,15 +200,32 @@ SftpSubprocessClient::BackupResult SftpSubprocessClient::executeBackup(const std
         argStrings.push_back("-P");
         argStrings.push_back(std::to_string(config.port));
         argStrings.push_back("-o");
-        argStrings.push_back("BatchMode=yes");
-        argStrings.push_back("-o");
         argStrings.push_back("ConnectTimeout=" + std::to_string(config.connectTimeout));
         argStrings.push_back("-o");
         argStrings.push_back("StrictHostKeyChecking=accept-new");
 
-        if (!config.identityFile.empty()) {
-            argStrings.push_back("-i");
-            argStrings.push_back(BackupConfig::expandPath(config.identityFile));
+        if (config.authMethod == BackupConfig::AuthMethod::Password) {
+            ::setenv("SSH_ASKPASS", askpassScriptPath.c_str(), 1);
+            ::setenv("SSH_ASKPASS_REQUIRE", "force", 1);
+            ::setenv("VAULTSYNC_SSH_PASSWORD", config.password.c_str(), 1);
+            ::setenv("DISPLAY", ":0", 0);
+
+            argStrings.push_back("-o");
+            argStrings.push_back("BatchMode=no");
+            argStrings.push_back("-o");
+            argStrings.push_back("PreferredAuthentications=password,keyboard-interactive");
+            argStrings.push_back("-o");
+            argStrings.push_back("NumberOfPasswordPrompts=1");
+        } else {
+            argStrings.push_back("-o");
+            argStrings.push_back("BatchMode=yes");
+            argStrings.push_back("-o");
+            argStrings.push_back("PreferredAuthentications=publickey");
+
+            if (!config.identityFile.empty()) {
+                argStrings.push_back("-i");
+                argStrings.push_back(BackupConfig::expandPath(config.identityFile));
+            }
         }
 
         argStrings.push_back(target);

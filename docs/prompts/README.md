@@ -35,6 +35,7 @@ This document chronicles the prompt interactions, architectural directives, and 
 | **Prompt 26** | CI/CD Standby Agent Provisioning & Orchestrator Execution | Orchestrator (`feature/off-site_backups`) | Spawned CI/CD standby subagent with full VPS reprepro context; continued Phase 1 & 2 implementation in parent orchestrator. | Subagent `CI/CD Standby Specialist` |
 | **Prompt 27** | Phase 4: Extension Frontend & DOM Autofill Implementation | Orchestrator (`feature/off-site_backups`) | Implemented MV3 background message routing, content script form detection, inline badge rendering, synthetic bubbling autofill, and popup UI. | `background.js`, `content.js/.css`, `popup.html/.js` |
 | **Prompt 28** | Phase 5: End-to-End Verification & Security Hardening | Orchestrator (`feature/off-site_backups`) | Implemented inactivity auto-lock, basic-auth URL normalization, POSIX subprocess binary IPC test, and interactive HTML test bench. | `test_native_host.cpp`, `NativeHost.cpp`, `test_login_page.html`, `TerminalUtils.cpp` |
+| **Prompt 29** | Off-Site Backup SFTP Password & Key Auth Selection | Orchestrator (`feature/off-site_backups`) | Implemented password/key authentication selection for SFTP backups with OpenSSH SSH_ASKPASS support and FTXUI Tab 4 UI. | `BackupConfig.h/.cpp`, `SftpSubprocessClient.cpp`, `src/main.cpp`, `test_cipher.cpp` |
 
 ---
 
@@ -627,6 +628,31 @@ the last phase 5... wrap it up and make sure no flow is broken
 - [tests/test_native_host.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_native_host.cpp)
 - [src/ui/TerminalUtils.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/ui/TerminalUtils.cpp)
 - [extension/test_login_page.html](file:///home/palash/Documents/C++_miniProject/VaultSync/extension/test_login_page.html)
+- [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
+
+---
+
+## Prompt 29: Off-Site Backup SFTP Password & Key Auth Selection
+
+### Summary of User Prompt
+in the off-site backup function... I should be able to sftp via password as well... add an option for that. Password / Key based auth selection. and implement it
+
+### Key Architecture / Design Objectives
+- Support both SSH Key-based and Password-based authentication for off-site SFTP vault backups.
+- Implement headless password injection into OpenSSH `sftp` subprocess without external dependencies.
+- Add dynamic authentication method selector and credential input in FTXUI TUI Tab 4.
+
+### Orchestrator Actions & Results
+- Extended `BackupConfig` with `AuthMethod` enum, `password` field, and 0600 POSIX file persistence.
+- Implemented `SSH_ASKPASS` / `SSH_ASKPASS_REQUIRE=force` headless password injection with RAII tmpfs script cleanup in `SftpSubprocessClient`.
+- Integrated `Radiobox` auth mode selector and dynamic tab focusing in `src/main.cpp`, verified 100% CTest pass rate.
+
+### Artifacts and Files Involved
+- [include/storage/BackupConfig.h](file:///home/palash/Documents/C++_miniProject/VaultSync/include/storage/BackupConfig.h)
+- [src/storage/BackupConfig.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/storage/BackupConfig.cpp)
+- [src/storage/SftpSubprocessClient.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/storage/SftpSubprocessClient.cpp)
+- [src/main.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/src/main.cpp)
+- [tests/test_cipher.cpp](file:///home/palash/Documents/C++_miniProject/VaultSync/tests/test_cipher.cpp)
 - [docs/prompts/README.md](file:///home/palash/Documents/C++_miniProject/VaultSync/docs/prompts/README.md)
 
 ---

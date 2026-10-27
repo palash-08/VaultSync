@@ -1304,7 +1304,12 @@ void runMasterVaultSession(MasterVault& vault) {
     std::string backupUser = backupConfig.user;
     std::string backupRemoteDir = backupConfig.remoteDir;
     std::string backupKeyPath = backupConfig.identityFile;
+    std::string backupPassword = backupConfig.password;
     std::string backupTimeoutStr = std::to_string(backupConfig.connectTimeout);
+
+    std::vector<std::string> bkpAuthMethodLabels = {"SSH Key Auth", "Password Auth"};
+    int bkpAuthIdx = (backupConfig.authMethod == BackupConfig::AuthMethod::Password) ? 1 : 0;
+    auto radioBkpAuth = Radiobox(&bkpAuthMethodLabels, &bkpAuthIdx);
 
     std::string backupStatusMsg = "Ready. Configure remote host and click Trigger Off-Site Backup.";
     bool isBackingUp = false;
@@ -1317,6 +1322,7 @@ void runMasterVaultSession(MasterVault& vault) {
     Component inputBkpUser = Input(&backupUser, "e.g. palash (optional)", Theme::inputOption());
     Component inputBkpDir = Input(&backupRemoteDir, "backups/vaultsync", Theme::inputOption());
     Component inputBkpKey = Input(&backupKeyPath, "e.g. ~/.ssh/id_ed25519 (optional)", Theme::inputOption());
+    Component inputBkpPassword = Input(&backupPassword, "Enter remote SFTP password...", Theme::inputOption(true));
     Component inputBkpTimeout = Input(&backupTimeoutStr, "5", Theme::inputOption());
 
     auto saveConfigAction = [&] {
@@ -1325,7 +1331,9 @@ void runMasterVaultSession(MasterVault& vault) {
         backupConfig.user = trimString(backupUser);
         backupConfig.remoteDir = trimString(backupRemoteDir);
         if (backupConfig.remoteDir.empty()) backupConfig.remoteDir = "backups/vaultsync";
+        backupConfig.authMethod = (bkpAuthIdx == 1) ? BackupConfig::AuthMethod::Password : BackupConfig::AuthMethod::Key;
         backupConfig.identityFile = trimString(backupKeyPath);
+        backupConfig.password = backupPassword;
         try { backupConfig.connectTimeout = std::stoi(backupTimeoutStr); } catch (...) { backupConfig.connectTimeout = 5; }
 
         if (backupConfig.saveToFile()) {
@@ -1344,6 +1352,13 @@ void runMasterVaultSession(MasterVault& vault) {
 
         if (!backupConfig.isValid()) {
             backupStatusMsg = "Please enter a valid remote host before initiating backup.";
+            hasAttemptedBackup = true;
+            lastBackupSuccess = false;
+            return;
+        }
+
+        if (backupConfig.authMethod == BackupConfig::AuthMethod::Password && backupConfig.password.empty()) {
+            backupStatusMsg = "Please enter an SFTP password for password-based authentication.";
             hasAttemptedBackup = true;
             lastBackupSuccess = false;
             return;
@@ -1405,11 +1420,17 @@ void runMasterVaultSession(MasterVault& vault) {
         Container::Vertical({}),
     }, &tab3SubIdx);
 
+    auto authCredentialTab = Container::Tab({
+        inputBkpKey,
+        inputBkpPassword,
+    }, &bkpAuthIdx);
+
     auto tab4Container = Container::Vertical({
         inputBkpHost,
         Container::Horizontal({ inputBkpPort, inputBkpTimeout }),
         Container::Horizontal({ inputBkpUser, inputBkpDir }),
-        inputBkpKey,
+        radioBkpAuth,
+        authCredentialTab,
         Container::Horizontal({ btnTriggerBackup, btnSaveConfig }),
     });
     auto tab5Container = Container::Vertical({}); // Tab 5: Lock & Logout
@@ -1712,9 +1733,18 @@ void runMasterVaultSession(MasterVault& vault) {
                     inputBkpDir->Render() | flex_grow,
                 }),
                 hbox({
-                    text(" SSH Key     : ") | bold | size(WIDTH, EQUAL, 16),
-                    inputBkpKey->Render() | flex_grow,
+                    text(" Auth Method : ") | bold | size(WIDTH, EQUAL, 16),
+                    radioBkpAuth->Render() | flex_grow,
                 }),
+                (bkpAuthIdx == 0)
+                    ? hbox({
+                        text(" SSH Key     : ") | bold | size(WIDTH, EQUAL, 16),
+                        inputBkpKey->Render() | flex_grow,
+                      })
+                    : hbox({
+                        text(" Password    : ") | bold | size(WIDTH, EQUAL, 16),
+                        inputBkpPassword->Render() | flex_grow,
+                      }),
                 separator() | color(Theme::Subtle),
                 hbox({
                     btnTriggerBackup->Render(),
@@ -1734,6 +1764,7 @@ void runMasterVaultSession(MasterVault& vault) {
                 vbox({
                     hbox({ text(" • Local Source : ") | dim, text(vault.getVaultPath()) | color(Theme::TextBright) }),
                     hbox({ text(" • Encrypted    : ") | dim, text("AES-256-GCM ciphertext payload (no plaintext is ever exposed)") | color(Theme::Success) }),
+                    hbox({ text(" • Auth Mode    : ") | dim, text(bkpAuthIdx == 0 ? "SSH Public Key Auth" : "SFTP Password Auth") | color(Theme::TextBright) }),
                     hbox({ text(" • Batch Atomic : ") | dim, text("Two-phase atomic commit (.tmp upload -> atomic rename)") | color(Theme::Subtle) }),
                     hbox({ text(" • Config File  : ") | dim, text(BackupConfig::getDefaultConfigPath()) | color(Theme::Subtle) }),
                 }),

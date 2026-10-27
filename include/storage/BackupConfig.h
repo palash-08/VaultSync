@@ -10,12 +10,29 @@
  * (defaulting to ~/.config/vaultsync/backup.conf) with restrictive 0600 POSIX permissions.
  */
 struct BackupConfig {
+    enum class AuthMethod {
+        Key,
+        Password
+    };
+
     std::string host;               ///< Remote host (Tailscale MagicDNS name e.g., "backup-node" or 100.x.y.z)
     int port = 22;                  ///< SSH/SFTP port (default: 22)
     std::string user;               ///< Remote SSH username (default: current local user if empty)
     std::string remoteDir = "backups/vaultsync"; ///< Remote directory path (default: "backups/vaultsync")
-    std::string identityFile;       ///< Private key path (optional, e.g., "~/.ssh/id_ed25519")
+    AuthMethod authMethod = AuthMethod::Key;     ///< Authentication mode: Key (default) or Password
+    std::string identityFile;       ///< Private key path (e.g., "~/.ssh/id_ed25519")
+    std::string password;           ///< Remote SFTP password (for password-based authentication)
     int connectTimeout = 5;         ///< Connection timeout in seconds (default: 5)
+
+    /**
+     * @brief Returns string representation of auth method ("key" or "password").
+     */
+    std::string getAuthMethodString() const;
+
+    /**
+     * @brief Sets auth method from string ("key" or "password").
+     */
+    void setAuthMethodFromString(const std::string& method);
 
     /**
      * @brief Checks if the configuration is populated with minimum necessary fields (host not empty).

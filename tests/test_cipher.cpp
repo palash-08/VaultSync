@@ -1243,6 +1243,8 @@ void testOffsiteBackupConfigAndSubprocess() {
     assert(defaultConfig.port == 22 && "Default port must be 22!");
     assert(defaultConfig.remoteDir == "backups/vaultsync" && "Default remoteDir must be 'backups/vaultsync'!");
     assert(defaultConfig.connectTimeout == 5 && "Default timeout must be 5s!");
+    assert(defaultConfig.authMethod == BackupConfig::AuthMethod::Key && "Default authMethod must be Key!");
+    assert(defaultConfig.getAuthMethodString() == "key" && "Default authMethod string must be 'key'!");
 
     // 2. Verify Config save and load with strict 0600 POSIX permissions
     const std::string testConfPath = "data/test_backup.conf";
@@ -1256,6 +1258,7 @@ void testOffsiteBackupConfigAndSubprocess() {
     configToSave.user = "tailscale_user";
     configToSave.remoteDir = "remote/vault_backups";
     configToSave.identityFile = "~/.ssh/test_id_ed25519";
+    configToSave.authMethod = BackupConfig::AuthMethod::Key;
     configToSave.connectTimeout = 3;
 
     assert(configToSave.isValid() && "Populated config must be valid!");
@@ -1276,11 +1279,38 @@ void testOffsiteBackupConfigAndSubprocess() {
     assert(loadedConfig.user == "tailscale_user");
     assert(loadedConfig.remoteDir == "remote/vault_backups");
     assert(loadedConfig.identityFile == "~/.ssh/test_id_ed25519");
+    assert(loadedConfig.authMethod == BackupConfig::AuthMethod::Key);
+    assert(loadedConfig.getAuthMethodString() == "key");
     assert(loadedConfig.connectTimeout == 3);
 
     // Verify path expansion for home directory
     std::string expanded = BackupConfig::expandPath("~/.ssh/test_id_ed25519");
     assert(expanded.find('~') == std::string::npos && "expandPath must replace leading tilde with home directory!");
+
+    fs::remove(testConfPath);
+
+    // 2b. Verify Password-based Auth Config save & load roundtrip
+    BackupConfig pwConfigToSave;
+    pwConfigToSave.host = "remote-sftp.box";
+    pwConfigToSave.port = 2022;
+    pwConfigToSave.user = "backup_admin";
+    pwConfigToSave.remoteDir = "vault_sync_backups";
+    pwConfigToSave.authMethod = BackupConfig::AuthMethod::Password;
+    pwConfigToSave.password = "SuperSecretSFTPPass!2026";
+    pwConfigToSave.connectTimeout = 4;
+
+    assert(pwConfigToSave.isValid());
+    assert(pwConfigToSave.saveToFile(testConfPath));
+
+    BackupConfig loadedPwConfig = BackupConfig::loadFromFile(testConfPath);
+    assert(loadedPwConfig.isValid());
+    assert(loadedPwConfig.host == "remote-sftp.box");
+    assert(loadedPwConfig.port == 2022);
+    assert(loadedPwConfig.user == "backup_admin");
+    assert(loadedPwConfig.authMethod == BackupConfig::AuthMethod::Password);
+    assert(loadedPwConfig.getAuthMethodString() == "password");
+    assert(loadedPwConfig.password == "SuperSecretSFTPPass!2026");
+    assert(loadedPwConfig.connectTimeout == 4);
 
     fs::remove(testConfPath);
 
@@ -1298,6 +1328,19 @@ void testOffsiteBackupConfigAndSubprocess() {
     auto resInvalid = SftpSubprocessClient::executeBackup("/non/existent/file.bin", invalidConfig);
     assert(!resInvalid.success && "executeBackup on nonexistent file must fail!");
 
+    const std::string dummyVaultFile = "data/test_dummy_vault.bin";
+    std::ofstream dummyOut(dummyVaultFile, std::ios::binary);
+    dummyOut << "TEST_VAULT_PAYLOAD_CIPHERTEXT";
+    dummyOut.close();
+
+    BackupConfig emptyPwConfig;
+    emptyPwConfig.host = "backup.server.internal";
+    emptyPwConfig.authMethod = BackupConfig::AuthMethod::Password;
+    emptyPwConfig.password = "";
+    auto resEmptyPw = SftpSubprocessClient::executeBackup(dummyVaultFile, emptyPwConfig);
+    assert(!resEmptyPw.success && "executeBackup with password auth but empty password must fail!");
+    assert(resEmptyPw.message.find("password is required") != std::string::npos);
+
     // 5. Verify MasterVault integration checks
     MasterVault vault;
     auto lockedBkp = vault.performOffsiteBackup(configToSave);
@@ -1305,11 +1348,6 @@ void testOffsiteBackupConfigAndSubprocess() {
     assert(lockedBkp.message.find("locked") != std::string::npos && "Error message must state Master Vault is locked!");
 
     // 6. Verify subprocess execution against closed port on localhost (terminates cleanly without hang)
-    const std::string dummyVaultFile = "data/test_dummy_vault.bin";
-    std::ofstream dummyOut(dummyVaultFile, std::ios::binary);
-    dummyOut << "TEST_VAULT_PAYLOAD_CIPHERTEXT";
-    dummyOut.close();
-
     BackupConfig unreachableConfig;
     unreachableConfig.host = "127.0.0.1";
     unreachableConfig.port = 65534; // Closed port

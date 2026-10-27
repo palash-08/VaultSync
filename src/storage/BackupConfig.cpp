@@ -31,6 +31,19 @@ bool BackupConfig::isValid() const {
     return !host.empty() && port > 0 && port <= 65535 && connectTimeout > 0;
 }
 
+std::string BackupConfig::getAuthMethodString() const {
+    return (authMethod == AuthMethod::Password) ? "password" : "key";
+}
+
+void BackupConfig::setAuthMethodFromString(const std::string& method) {
+    std::string m = toLower(trim(method));
+    if (m == "password") {
+        authMethod = AuthMethod::Password;
+    } else {
+        authMethod = AuthMethod::Key;
+    }
+}
+
 std::string BackupConfig::expandPath(const std::string& path) {
     if (path.rfind("~/", 0) == 0) {
         const char* home = std::getenv("HOME");
@@ -87,8 +100,12 @@ BackupConfig BackupConfig::loadFromFile(const std::string& configPath) {
             config.user = val;
         } else if (key == "remote_dir" || key == "remotedir") {
             config.remoteDir = val;
+        } else if (key == "auth_method" || key == "authmethod") {
+            config.setAuthMethodFromString(val);
         } else if (key == "identity_file" || key == "identityfile") {
             config.identityFile = val;
+        } else if (key == "password") {
+            config.password = val;
         } else if (key == "connect_timeout" || key == "connecttimeout") {
             try { config.connectTimeout = std::stoi(val); } catch (...) {}
         }
@@ -119,7 +136,11 @@ bool BackupConfig::saveToFile(const std::string& configPath) const {
         file << "port = " << port << "\n";
         file << "user = " << user << "\n";
         file << "remote_dir = " << remoteDir << "\n";
+        file << "auth_method = " << getAuthMethodString() << "\n";
         file << "identity_file = " << identityFile << "\n";
+        if (authMethod == AuthMethod::Password && !password.empty()) {
+            file << "password = " << password << "\n";
+        }
         file << "connect_timeout = " << connectTimeout << "\n";
         file.close();
 
