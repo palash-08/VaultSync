@@ -1,3 +1,7 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include "native_host/NativeHost.h"
 #include "credentials/WebCredential.h"
 #include "storage/FileStorage.h"
@@ -355,11 +359,12 @@ void testMultiCredentialMatchingAndComplexDomains() {
     assert(resp2["count"] == 0);
     assert(resp2["credentials"].empty());
 
-    // Query 3: Empty domain -> returns all credentials
+    // Query 3: Empty domain -> returns 0 credentials (security: never return all credentials)
     std::string query3 = R"({"action":"get_credentials","url":""})";
     auto resp3 = nlohmann::json::parse(host.handleMessage(query3));
     assert(resp3["success"] == true);
-    assert(resp3["count"] == 3);
+    assert(resp3["count"] == 0);
+    assert(resp3["credentials"].empty());
 
     // Lock and cleanup
     host.handleMessage(R"({"action":"lock"})");
@@ -486,6 +491,159 @@ void testSubprocessHostBinaryIPC() {
     std::cout << "  ✓ Subprocess binary IPC over standard POSIX streams verified" << std::endl;
 }
 
+void testStrictDomainAndSchemeMatching() {
+    std::cout << "[Test 9] Testing strict domain matching, subdomain isolation, scheme and port rules..." << std::endl;
+
+    std::string testUser = "strict_match_user";
+    std::string testVaultPath = MasterVault::getVaultPathForUser(testUser);
+
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+    MasterVault::resetMasterLockout(testUser);
+
+    {
+        MasterVault mv;
+        bool created = mv.create(testUser, "MasterPass@123");
+        assert(created && "Failed to create test vault");
+
+        int attempts = 0;
+        bool unlocked = mv.unlockMaster(testUser, "MasterPass@123", attempts);
+        assert(unlocked);
+
+        bool credSetup = mv.setupCredentialPassword("CredPass@456");
+        assert(credSetup);
+
+        // 1. Standard https github credential
+        auto cred1 = std::make_shared<WebCredential>(
+            "GitHub",
+            "octocat",
+            "SecretGHPass1!",
+            "GitHub account",
+            "https://github.com/login"
+        );
+        bool add1 = mv.addCredential(cred1);
+        assert(add1);
+
+        // 2. Schemeless credential (defaults to https)
+        auto cred2 = std::make_shared<WebCredential>(
+            "Schemeless Service",
+            "schemeless_user",
+            "SchemelessPass2@",
+            "Schemeless entry",
+            "example.com/account"
+        );
+        bool add2 = mv.addCredential(cred2);
+        assert(add2);
+
+        // 3. Explicit http credential with port 8080
+        auto cred3 = std::make_shared<WebCredential>(
+            "Local Dev Server",
+            "admin_dev",
+            "LocalDevPass3#",
+            "Localhost test entry",
+            "http://localhost:8080/dashboard"
+        );
+        bool add3 = mv.addCredential(cred3);
+        assert(add3);
+    }
+
+    NativeHost host;
+
+    // Unlock
+    std::string unlockMsg = R"({"action":"unlock","user":")" + testUser +
+                            R"(","master_password":"MasterPass@123","cred_password":"CredPass@456"})";
+    auto unlockResp = nlohmann::json::parse(host.handleMessage(unlockMsg));
+    assert(unlockResp["success"] == true);
+
+    // 1. Lookalike / Substring rejection tests for github.com:
+    // hub.com must NOT match github.com
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://hub.com/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+    // evilgithub.com must NOT match github.com
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://evilgithub.com/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+    // github.com.attacker.test must NOT match github.com
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://github.com.attacker.test/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+    // Empty domain must NOT match anything
+    {
+        std::string q = R"({"action":"get_credentials","url":""})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+
+    // 2. Exact match and valid subdomain match:
+    // github.com matches https://github.com/session
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://github.com/session"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 1);
+        assert(resp["credentials"][0]["username"] == "octocat");
+    }
+    // login.github.com matches https://github.com/login (request host is true subdomain of savedHost)
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://login.github.com/auth"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 1);
+        assert(resp["credentials"][0]["username"] == "octocat");
+    }
+
+    // 3. Scheme rules:
+    // An http page must NOT receive an https credential for the same host
+    {
+        std::string q = R"({"action":"get_credentials","url":"http://github.com/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+    // Schemeless saved credential treated as https:
+    // https://example.com/login matches example.com
+    {
+        std::string q = R"({"action":"get_credentials","url":"https://example.com/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 1);
+        assert(resp["credentials"][0]["username"] == "schemeless_user");
+    }
+    // http://example.com/login must NOT match schemeless saved credential (treated as https)
+    {
+        std::string q = R"({"action":"get_credentials","url":"http://example.com/login"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+
+    // 4. Port matching & HTTP allowed only when saved credential is HTTP:
+    // http://localhost:8080/app matches http://localhost:8080
+    {
+        std::string q = R"({"action":"get_credentials","url":"http://localhost:8080/app"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 1);
+        assert(resp["credentials"][0]["username"] == "admin_dev");
+    }
+    // http://localhost:3000/app does NOT match saved port 8080
+    {
+        std::string q = R"({"action":"get_credentials","url":"http://localhost:3000/app"})";
+        auto resp = nlohmann::json::parse(host.handleMessage(q));
+        assert(resp["success"] == true && resp["count"] == 0);
+    }
+
+    // Lock and cleanup
+    host.handleMessage(R"({"action":"lock"})");
+    if (fs::exists(testVaultPath)) {
+        fs::remove(testVaultPath);
+    }
+
+    std::cout << "  ✓ Strict domain matching, subdomain isolation, scheme, and port rules verified" << std::endl;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << " VaultSync Native Messaging Host Tests" << std::endl;
@@ -500,13 +658,14 @@ int main() {
         testInactivityTimeoutAutoLock();
         testMultiCredentialMatchingAndComplexDomains();
         testSubprocessHostBinaryIPC();
+        testStrictDomainAndSchemeMatching();
     } catch (const std::exception& e) {
         std::cerr << "FAILED with exception: " << e.what() << std::endl;
         return 1;
     }
 
     std::cout << "========================================" << std::endl;
-    std::cout << " All 8 Native Host Test Suites Passed!  " << std::endl;
+    std::cout << " All 9 Native Host Test Suites Passed!  " << std::endl;
     std::cout << "========================================" << std::endl;
     return 0;
 }

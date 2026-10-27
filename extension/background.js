@@ -8,31 +8,107 @@
  */
 
 const NATIVE_HOST_NAME = "com.vaultsync.native";
+const REQUEST_TIMEOUT_MS = 10000; // 10s timeout to prevent stuck host from hanging autofill
+
+let nativePort = null;
+const pendingRequests = [];
 
 /**
- * Sends a length-prefixed JSON request to the C++ native messaging host.
+ * Handles port disconnection and resets queue state.
+ * @param {string} [reason] Optional override error reason (e.g. "timeout").
+ */
+function handlePortDisconnect(reason) {
+  const errorMsg = reason || chrome.runtime.lastError?.message || "Native host disconnected.";
+  if (nativePort) {
+    try {
+      nativePort.disconnect();
+    } catch (_) {}
+    nativePort = null;
+  }
+  updateBadgeState("Locked");
+
+  while (pendingRequests.length > 0) {
+    const { resolve, timer } = pendingRequests.shift();
+    if (timer) {
+      clearTimeout(timer);
+    }
+    resolve({
+      success: false,
+      error: errorMsg
+    });
+  }
+}
+
+/**
+ * Lazily creates and returns a persistent native messaging port.
+ * @returns {chrome.runtime.Port | null} Active native messaging port.
+ */
+function getOrCreateNativePort() {
+  if (nativePort) {
+    return nativePort;
+  }
+
+  try {
+    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  } catch (err) {
+    nativePort = null;
+    return null;
+  }
+
+  // MV3 service workers can be suspended; a fresh connection or reconnect begins in locked state
+  updateBadgeState("Locked");
+
+  nativePort.onMessage.addListener((response) => {
+    if (pendingRequests.length > 0) {
+      const { resolve, timer } = pendingRequests.shift();
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(response);
+    }
+  });
+
+  nativePort.onDisconnect.addListener(() => {
+    handlePortDisconnect();
+  });
+
+  return nativePort;
+}
+
+/**
+ * Sends a JSON request to the persistent C++ native messaging host port.
+ * Responses are matched sequentially in FIFO order.
  * @param {Object} message JSON request object.
  * @returns {Promise<Object>} Response object from host or error descriptor.
  */
 function sendNativeMessage(message) {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, message, (response) => {
-        if (chrome.runtime.lastError) {
-          resolve({
-            success: false,
-            error: chrome.runtime.lastError.message || "Failed to communicate with native host."
-          });
-        } else if (!response) {
-          resolve({
-            success: false,
-            error: "Native host closed connection without returning data."
-          });
-        } else {
-          resolve(response);
-        }
-      });
+      const port = getOrCreateNativePort();
+      if (!port) {
+        resolve({
+          success: false,
+          error: chrome.runtime.lastError?.message || "Failed to connect to native host."
+        });
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        // Disconnect and reset port on timeout so later responses do not land on the wrong request
+        handlePortDisconnect("timeout");
+      }, REQUEST_TIMEOUT_MS);
+
+      pendingRequests.push({ resolve, timer });
+      port.postMessage(message);
     } catch (err) {
+      const idx = pendingRequests.findIndex((req) => req.resolve === resolve);
+      if (idx !== -1) {
+        const [removed] = pendingRequests.splice(idx, 1);
+        if (removed.timer) {
+          clearTimeout(removed.timer);
+        }
+      }
+      handlePortDisconnect();
       resolve({
         success: false,
         error: `Runtime exception: ${err.message}`
@@ -96,10 +172,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (action === "get_credentials") {
+    // Determine trusted target URL from sender frame or tab, never from unverified request body
+    // If login form is in a cross-origin iframe, sender.url gives that frame's own URL
+    let targetUrl = "";
+    if (sender?.url && !sender.url.startsWith("chrome-extension://")) {
+      targetUrl = sender.url;
+    } else if (sender?.tab?.url) {
+      targetUrl = sender.tab.url;
+    } else {
+      // Internal extension page (e.g. popup UI) querying active tab
+      targetUrl = request.url || request.domain || "";
+    }
+
     sendNativeMessage({
       action: "get_credentials",
-      domain: request.domain,
-      url: request.url
+      url: targetUrl
     }).then((resp) => {
       sendResponse(resp);
     });

@@ -71,6 +71,20 @@ public:
     static std::string extractDomain(const std::string& url);
 
     /**
+     * @brief Extracts lowercase scheme from URL (e.g. "https://github.com" -> "https").
+     * @param url Full or partial URL.
+     * @return Lowercase scheme or empty string if no scheme present.
+     */
+    static std::string extractScheme(const std::string& url);
+
+    /**
+     * @brief Extracts explicit port string from URL (e.g. "http://localhost:8080" -> "8080").
+     * @param url Full or partial URL.
+     * @return Port string or empty string if no explicit port present.
+     */
+    static std::string extractPort(const std::string& url);
+
+    /**
      * @brief Dispatches a JSON request string to the corresponding VaultSync action.
      * @param requestJson Raw JSON string received from Chromium.
      * @return Formatted JSON response string.
