@@ -195,8 +195,14 @@ SftpSubprocessClient::BackupResult SftpSubprocessClient::executeBackup(const std
 
         std::vector<std::string> argStrings;
         argStrings.push_back("sftp");
-        argStrings.push_back("-b");
-        argStrings.push_back("-"); // Read commands from stdin stream
+        // Note: sftp -b automatically injects -o BatchMode=yes as the first option to ssh,
+        // which prevents password prompting and causes SSH_ASKPASS to be ignored.
+        // Therefore, we only pass -b for key-based authentication; in password mode,
+        // sftp reads batch commands from piped stdin without enforcing BatchMode=yes.
+        if (config.authMethod != BackupConfig::AuthMethod::Password) {
+            argStrings.push_back("-b");
+            argStrings.push_back("-"); // Read commands from stdin stream
+        }
         argStrings.push_back("-P");
         argStrings.push_back(std::to_string(config.port));
         argStrings.push_back("-o");
