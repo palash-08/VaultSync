@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Encrypted terminal-based password and credential manager written in modern C++17.</strong><br>
-  Built with OpenSSL AES-256-GCM authenticated encryption, PBKDF2-HMAC-SHA256 key derivation, and XDG-compliant storage.
+  Built with AES-256-GCM authenticated encryption, PBKDF2-SHA256 key derivation.
 </p>
 
 ---
@@ -14,7 +14,7 @@
 
 ## Overview
 
-**VaultSync** is a lightweight, terminal-native credential manager designed for personal workstation security. It stores credentials locally in encrypted binary vaults using authenticated AES-256-GCM symmetric encryption, memory-hard PBKDF2 key derivation (600,000 iterations), and zero-knowledge dual authentication (separating login authentication from credential vault encryption). Vault files are strictly isolated in `$XDG_STATE_HOME/vaultsync` (defaulting to `~/.local/state/vaultsync`) with POSIX `0700` directory and `0600` file permissions.
+**VaultSync** is a lightweight, terminal-native credential manager designed for personal workstation security. It stores credentials locally in encrypted binary vaults using authenticated AES-256-GCM encryption, PBKDF2 key derivation (600,000 iterations), and zero-knowledge dual authentication (separating login authentication from credential vault encryption). Vault files are strictly isolated in `$XDG_STATE_HOME/vaultsync` (defaulting to `~/.local/state/vaultsync`).
 
 ---
 
@@ -139,49 +139,8 @@ ctest --test-dir build --verbose
 The test suite validates:
 - AES-256-GCM encryption, decryption, and authentication tag verification.
 - Tamper detection on modified ciphertext and initialization vectors.
-- 600,000-iteration PBKDF2-HMAC-SHA256 key derivation.
-- XDG storage relocation and POSIX `0700`/`0600` permissions.
+- 600,000-iteration PBKDF2-SHA256 key derivation.
 - Polymorphic binary serialization and deserialization.
 - Brute-force lockout rate limiting and dual authentication logic.
 
 ---
-
-## Project Layout
-
-```
-VaultSync/
-├── CMakeLists.txt          # Build system and CPack Debian packaging rules
-├── README.md               # Project documentation
-├── architecture.md         # 23-section architecture specification
-├── include/                # Public C++ header files
-│   ├── AESCipher.h         # OpenSSL AES-256-GCM authenticated cipher
-│   ├── Credential.h        # Base polymorphic credential abstraction
-│   ├── CredentialFactory.h # Factory for instantiating polymorphic credentials
-│   ├── CryptoUtils.h       # PBKDF2 key derivation & cryptographic utilities
-│   ├── FileStorage.h       # Tagged binary persistence with atomic writes
-│   ├── ICipher.h           # Abstract cipher interface
-│   ├── IVault.h            # Abstract vault interface
-│   ├── MasterVault.h       # Dual-auth coordinator and lockout protection
-│   ├── PasswordAnalyzer.h  # Vault-wide security scoring and duplicate check
-│   ├── PasswordGenerator.h # Cryptographically secure password generator
-│   ├── PasswordStrength.h  # Entropy scoring and pattern evaluation
-│   ├── Repository.h        # Generic template repository with predicate search
-│   ├── SSHCredential.h     # SSH credential specialization
-│   ├── TerminalUtils.h     # Terminal input masking & formatting
-│   ├── Vault.h             # Concrete vault storage engine
-│   ├── VaultExceptions.h   # Custom exception hierarchy
-│   ├── VaultProxy.h        # Access control proxy wrapper
-│   ├── WebCredential.h     # Web credential specialization
-│   ├── WiFiCredential.h    # WiFi credential specialization
-│   └── XORCipher.h         # Fallback test cipher
-├── src/                    # C++ implementation files
-├── tests/                  # Automated test suite
-│   └── test_cipher.cpp     # CTest test suites (12 modules)
-└── docs/                   # Engineering logs and reference documentation
-```
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
